@@ -1323,13 +1323,27 @@ async function fetchKalshiMarkets(){
 // Find the Kalshi market in an event whose team (yes_sub_title, e.g. "Los Angeles D")
 // is a prefix of a full MLB team name (e.g. "Los Angeles Dodgers"). Disambiguates
 // the LA/NY/Chicago same-city pairs via the trailing nickname letter.
+// Map each MLB full team name to its Kalshi yes_sub_title (which uses quirky
+// short forms: "Chicago WS", "A's", "Los Angeles D"). Built explicitly because
+// fuzzy matching can't reliably tell Yankees("New York Y") from Mets("New York M").
+const KALSHI_SUBTITLE = {
+  'arizona diamondbacks':'arizona','atlanta braves':'atlanta','baltimore orioles':'baltimore',
+  'boston red sox':'boston','chicago cubs':'chicago c','chicago white sox':'chicago ws',
+  'cincinnati reds':'cincinnati','cleveland guardians':'cleveland','colorado rockies':'colorado',
+  'detroit tigers':'detroit','houston astros':'houston','kansas city royals':'kansas city',
+  'los angeles angels':'los angeles a','los angeles dodgers':'los angeles d','miami marlins':'miami',
+  'milwaukee brewers':'milwaukee','minnesota twins':'minnesota','new york mets':'new york m',
+  'new york yankees':'new york y','athletics':'as','oakland athletics':'as',
+  'philadelphia phillies':'philadelphia','pittsburgh pirates':'pittsburgh','san diego padres':'san diego',
+  'san francisco giants':'san francisco','seattle mariners':'seattle','st louis cardinals':'st louis',
+  'tampa bay rays':'tampa bay','texas rangers':'texas','toronto blue jays':'toronto',
+  'washington nationals':'washington',
+};
+function _normSub(s){ return (s||'').toLowerCase().replace(/[^a-z ]/g,'').replace(/\s+/g,' ').trim(); }
 function kalshiMktForTeam(markets, fullName){
-  const fn = (fullName||'').toLowerCase().trim();
-  if(!fn) return null;
-  return (markets||[]).find(m=>{
-    const sub = (m.yes_sub_title||'').toLowerCase().trim();
-    return sub.length >= 3 && fn.startsWith(sub);
-  }) || null;
+  const want = KALSHI_SUBTITLE[_normSub(fullName)];
+  if(!want) return null;
+  return (markets||[]).find(m=>_normSub(m.yes_sub_title)===want) || null;
 }
 
 // Approx start time (ms) from a Kalshi event ticker like
