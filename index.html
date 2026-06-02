@@ -1559,11 +1559,9 @@ function renderGame(game, extras){
         booksAgree: fairHomeSharp!=null ? booksAgree : null });
     }
   }
-  // Collect strong totals leans (≥1 run gap) for the summary card too
-  if(totalsLean && totalsLean.strong && !_isFinal && !_isLive){
-    BEST_BETS.push({ matchup:`${awayAbbr}@${homeAbbr}`, totals:true,
-      side:totalsLean.side, projTotal, ouLine, gap:totalsLean.gap });
-  }
+  // NOTE: totals (O/U) leans are intentionally NOT added to Best Bets — the
+  // signal is unproven (weak backtest skill), so it stays an informational
+  // per-game lean only until we have real tracked results. (See per-game leanHtml.)
 
   // Pitchers from ESPN (re-use from early extraction)
   const pitchers = espnGame?.pitchers;
@@ -2263,10 +2261,9 @@ function wireGameControls(container, ctrls){
 // Build the "Today's Best Bets" strip from BEST_BETS, insert after the header.
 function renderBestBets(container, hdr){
   const valuePlays = BEST_BETS.filter(b=>!b.totals).sort((a,b)=>b.roi-a.roi);
-  const totalPlays = BEST_BETS.filter(b=>b.totals).sort((a,b)=>b.gap-a.gap);
   const card=document.createElement('div');
   card.className='best-bets';
-  if(!valuePlays.length && !totalPlays.length){
+  if(!valuePlays.length){
     card.innerHTML=`<div class="bb-title">&#x1F3AF; Today's Best Bets</div>
       <div class="bb-empty">No pregame model edges vs the market today — the model agrees with Kalshi. Sit tight.</div>`;
   }else{
@@ -2278,16 +2275,9 @@ function renderBestBets(container, hdr){
         <span class="bb-edge">+${(b.roi*100).toFixed(0)}% ROI</span>
         <span class="bb-stake">${(b.stakeFrac*100).toFixed(1)}% bankroll</span>${ck}</div>`;
     }
-    for(const b of totalPlays.slice(0,4)){
-      rows+=`<div class="bb-row bb-tot"><span class="bb-mu">${b.matchup}</span>
-        <span class="bb-pick">${b.side==='OVER'?'▲ OVER':'▼ UNDER'} ${b.ouLine}</span>
-        <span class="bb-edge">proj ${b.projTotal.toFixed(1)}</span>
-        <span class="bb-stake">${b.gap.toFixed(1)} run gap</span></div>`;
-    }
-    const n=valuePlays.length+totalPlays.length;
-    card.innerHTML=`<div class="bb-title">&#x1F3AF; Today's Best Bets <span class="bb-count">${n}</span></div>
+    card.innerHTML=`<div class="bb-title">&#x1F3AF; Today's Best Bets <span class="bb-count">${valuePlays.length}</span></div>
       ${rows}
-      <div class="bb-foot">Moneyline = model prob beats Kalshi price after fees. Totals = projected total vs Vegas O/U (≥1 run gap; UNDER signal backtests stronger). Not financial advice.</div>`;
+      <div class="bb-foot">Moneyline value only: model win prob beats the Kalshi price after fees. Over/under leans are shown per-game but excluded here until the totals model has a tracked record. Not financial advice.</div>`;
   }
   hdr.insertAdjacentElement('afterend', card);
 }
