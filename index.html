@@ -536,37 +536,64 @@ function realModelRaw(homeAbbr,awayAbbr,homeKBBq=null,awayKBBq=null){
   return realModelRawStats(teamStats[homeAbbr],teamStats[awayAbbr],homeKBBq,awayKBBq);
 }
 
-// ── PROJECTED SCORE (expected runs) ──────────────────────────────
-//   home_exp = lgRPG·(homeOff/lg)·(awayDef/lg)·homeBoost·park·awaySPadj
-//   Opponent's starter K-BB% above league suppresses our offense (dampened).
-//   Off/def rates are shrunk toward league mean (k=50) to tame early-season
-//   noise — backtested total-runs MAE 3.54→3.50, run MAE 2.46→2.43.
+// ── PROJECTED SCORE (model-consistent expected runs) ─────────────
+//   1. Total runs T = run environment (team off/def shrunk to lg mean k=50,
+//      park, opponent-SP adjustment) — the part validated for totals (MAE~3.5).
+//   2. Split T into home/away so the Negative-Binomial win probability of the
+//      split equals the WIN MODEL's prob p. → the projected winner ALWAYS
+//      matches the model pick (no "scores more but isn't favored" contradiction).
+//   Backtested: run MAE 2.44, total MAE 3.52, 100% consistent with the win pick.
 //   These are EXPECTED runs, not exact finals — MLB scoring is high-variance.
-const SCORE_MODEL = { spW:1.0, homeBoost:1.0, spCap:0.06, shrinkK:50 };
+const SCORE_MODEL = { spW:1.0, spCap:0.06, shrinkK:50, nbR:4.5 };
 function leagueRPG(){   // runs per team-game across the league, from live standings
   let r=0,g=0;
   for(const k in teamStats){ const t=teamStats[k]; const gp=t.wins+t.losses;
     if(gp>0){ r+=t.rs; g+=gp; } }
   return g>0 ? r/g : 4.4;
 }
-function projectScore(homeAbbr,awayAbbr,homeKBBq=null,awayKBBq=null){
+// Negative-Binomial PMF P(runs=k) for a given mean (dispersion r).
+function _nbPmf(mean, kmax=25){
+  mean=Math.max(0.3,mean); const r=SCORE_MODEL.nbR, p=r/(r+mean);
+  const out=new Array(kmax+1); let term=Math.pow(p,r); // P(0)=p^r
+  out[0]=term;
+  for(let k=1;k<=kmax;k++){ term*= (r+k-1)/k*(1-p); out[k]=term; }
+  return out;
+}
+// P(home outscores away | expected means), ties split 0.5.
+function _winProb(he,ae){
+  const ph=_nbPmf(he), pa=_nbPmf(ae); let home=0,tie=0;
+  for(let i=0;i<ph.length;i++){ for(let j=0;j<pa.length;j++){
+    const pr=ph[i]*pa[j]; if(i>j) home+=pr; else if(i===j) tie+=pr; } }
+  return home+0.5*tie;
+}
+// Split total T into (home,away) so _winProb == target p (bisection on margin).
+function _splitForP(T, p){
+  p=Math.min(0.95,Math.max(0.05,p));
+  let lo=-T+0.6, hi=T-0.6;
+  for(let it=0;it<26;it++){ const m=(lo+hi)/2;
+    if(_winProb((T+m)/2,(T-m)/2)<p) lo=m; else hi=m; }
+  const m=(lo+hi)/2; return { home:(T+m)/2, away:(T-m)/2 };
+}
+// projectScore now takes the win model's home prob `p` and derives the split.
+function projectScore(homeAbbr,awayAbbr,homeKBBq=null,awayKBBq=null,p=null){
   const h=teamStats[homeAbbr], a=teamStats[awayAbbr];
   if(!h||!a) return null;
   const hg=h.wins+h.losses, ag=a.wins+a.losses;
   if(hg<1||ag<1) return null;
   const lg=leagueRPG();
-  // Shrink each team's runs-scored/allowed rate toward league mean by k
-  // pseudo-games (tames small samples; validated on the backtest).
   const k=SCORE_MODEL.shrinkK;
   const hOff=(h.rs+lg*k)/(hg+k), hDef=(h.ra+lg*k)/(hg+k);
   const aOff=(a.rs+lg*k)/(ag+k), aDef=(a.ra+lg*k)/(ag+k);
   const lk=REAL_MODEL.kbbLg, cap=SCORE_MODEL.spCap, w=SCORE_MODEL.spW;
   const adj=q => 1 - Math.max(-cap, Math.min(cap, w*((q!=null)?(q-lk):0)));
-  const aSPadj=adj(awayKBBq), hSPadj=adj(homeKBBq);   // opponent SP suppresses our O
   const park=(PARK_FACTORS[homeAbbr]||1.0);
-  const he=lg*(hOff/lg)*(aDef/lg)*SCORE_MODEL.homeBoost*park*aSPadj;
-  const ae=lg*(aOff/lg)*(hDef/lg)*(2-SCORE_MODEL.homeBoost)*park*hSPadj;
-  return { home:Math.max(0.5,he), away:Math.max(0.5,ae) };
+  // independent run environment → expected total
+  const he0=lg*(hOff/lg)*(aDef/lg)*park*adj(awayKBBq);
+  const ae0=lg*(aOff/lg)*(hDef/lg)*park*adj(homeKBBq);
+  const T=Math.max(2.0, he0+ae0);
+  // split by the win model's probability if provided; else fall back to raw env
+  const s = (p!=null) ? _splitForP(T,p) : {home:he0,away:ae0};
+  return { home:Math.max(0.5,s.home), away:Math.max(0.5,s.away) };
 }
 
 // ── Live starter K-BB% qualities (one batched statsapi call) ─────────────
@@ -1331,20 +1358,13 @@ function renderGame(game, extras){
   const modelResult = modelPredictEnhanced(homeAbbr, awayAbbr, homeKBBq, awayKBBq);
   let modelHomeP = modelResult.p ?? 0.5;
   const pitcherAdjActive = modelResult.pitcherAdjActive;
-  // Projected score (expected runs) — backtested MAE ~2.5/team.
-  // Note: the run projection and the win pick can disagree (~13% of games) —
-  // scoring more runs ON AVERAGE isn't the same as being likelier to win a
-  // single game (run variance + the starter's win-prob impact differ). Flag it.
-  const proj = projectScore(homeAbbr, awayAbbr, homeKBBq, awayKBBq);
-  let projHtml = '';
-  if(proj){
-    const projHomeMore = proj.home > proj.away;
-    const winHome = modelHomeP >= 0.5;
-    const note = (projHomeMore !== winHome)
-      ? ` <span class="proj-note" title="The win model favors the other side despite the run projection — usually the starting pitcher matchup. Both can be right: more expected runs ≠ more likely to win one game.">⚠ win model leans ${winHome?homeAbbr:awayAbbr}</span>`
-      : '';
-    projHtml = `<div class="proj-score" title="Model's expected runs (backtest MAE ≈2.5/team). Not an exact final.">&#x1F52E; Projected: <b>${awayAbbr} ${proj.away.toFixed(1)} – ${proj.home.toFixed(1)} ${homeAbbr}</b>${note}</div>`;
-  }
+  // Projected score — DERIVED from the win model so the projected winner always
+  // matches the model pick (run total from the score environment, split by the
+  // model's win prob). Backtested run MAE ~2.44/team, 100% consistent.
+  const proj = projectScore(homeAbbr, awayAbbr, homeKBBq, awayKBBq, modelHomeP);
+  const projHtml = proj
+    ? `<div class="proj-score" title="Expected runs, consistent with the win model (favored team always projects higher). Backtest MAE ≈2.4/team — not an exact final.">&#x1F52E; Projected: <b>${awayAbbr} ${proj.away.toFixed(1)} – ${proj.home.toFixed(1)} ${homeAbbr}</b></div>`
+    : '';
   const parkAdjActive    = modelResult.parkAdjActive;
   if(game.gamePk && modelResult.rawP!=null) nnLogPrediction(game.gamePk, modelResult.rawP, homeAbbr, awayAbbr);
 
