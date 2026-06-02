@@ -110,6 +110,21 @@
     .bb-warn{color:#fbbf24;font-size:.7rem}
     .bb-foot{font-size:.66rem;color:var(--dim2);margin-top:8px;line-height:1.4}
 
+    /* ── Live track record panel ── */
+    .tr-wrap{background:#070f1c;border-bottom:1px solid var(--border);padding:12px 24px}
+    .tr-head{font-size:.8rem;font-weight:800;color:var(--text);margin-bottom:10px;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+    .tr-sub{font-size:.68rem;color:var(--dim2);font-weight:500}
+    .tr-empty{font-size:.78rem;color:var(--dim2);line-height:1.5;max-width:760px}
+    .tr-kpis{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+    .tr-kpi{background:var(--card2);border:1px solid var(--border);border-radius:10px;padding:8px 16px;min-width:120px}
+    .tr-big{font-size:1.45rem;font-weight:800;color:var(--text)}
+    .tr-big.tr-good{color:var(--green)}
+    .tr-lbl{font-size:.66rem;color:var(--dim);margin-top:2px}
+    .tr-tiers{display:flex;flex-direction:column;gap:2px;max-width:340px;margin-bottom:8px}
+    .tr-row{display:flex;justify-content:space-between;font-size:.76rem;color:var(--dim2);padding:2px 0}
+    .tr-row b{color:var(--text)}
+    .tr-foot{font-size:.66rem;color:var(--dim2);line-height:1.4;max-width:760px}
+
     /* ── Game card ── */
     .game-card{
       background:var(--card);border:1px solid var(--border);border-radius:14px;
@@ -330,7 +345,8 @@
 </div>
 
 <div id="yday-record" style="display:none;font-size:.8rem;line-height:1.7;color:#cfe3d4;padding:8px 24px;background:linear-gradient(90deg,#0a1f14,#0d1521);border-bottom:1px solid var(--border);text-align:center"></div>
-<div id="nn-stats-bar" style="font-size:.73rem;color:var(--dim);padding:5px 24px;background:#070f1c;border-bottom:1px solid var(--border);text-align:center">&#x1F9E0; Real-Data Model · Loading…</div>
+<div id="nn-stats-bar" style="font-size:.73rem;color:var(--dim);padding:5px 24px;background:#070f1c;border-bottom:1px solid var(--border);text-align:center;cursor:pointer" title="Click to show/hide the live track record">&#x1F9E0; Real-Data Model · Loading…</div>
+<div id="track-record" style="display:none"></div>
 <main>
   <div id="status-banner">
     <div class="spinner"></div>
@@ -683,8 +699,45 @@ function nnStats(){
 // ── Display helper for NN stats bar ──────────────────────────────
 function buildNNStatText(){
   const s=nnStats();
-  if(!s) return '&#x1F9E0; Real-Data Model (logistic, 7.3K real games · 56.6% walk-forward) · Auto-calibrating from final scores…';
-  return '&#x1F9E0; Real-Data Model · '+s.n+' results logged · '+Math.round(s.acc*100)+'% live accuracy · Platt a='+s.plattA+' b='+s.plattB;
+  if(!s) return '&#x1F9E0; Real-Data Model (logistic, 7.3K real games · 56.6% walk-forward) · Auto-calibrating from final scores… <span style="color:var(--dim2)">(click for track record)</span>';
+  return '&#x1F9E0; Real-Data Model · '+s.n+' results logged · '+Math.round(s.acc*100)+'% live accuracy · Platt a='+s.plattA+' b='+s.plattB+' <span style="color:var(--dim2)">· click for track record</span>';
+}
+
+// ── LIVE TRACK RECORD — built from logged predictions + real results ─────────
+// Uses the calibrated prob (plattScale) for the pick; buckets by confidence so
+// you can see whether confident picks really hit harder, live (not just backtest).
+function buildTrackRecord(){
+  const el=document.getElementById('track-record'); if(!el) return;
+  const labeled=nnGameLog.filter(e=>e.result!=null);
+  if(labeled.length<1){
+    el.innerHTML=`<div class="tr-wrap"><div class="tr-head">📈 Live Track Record</div>
+      <div class="tr-empty">No graded games yet. The model auto-logs each day's picks and grades them from real final scores — check back after games finish. (Backtest baseline: 57% overall, 60–66% on confident picks.)</div></div>`;
+    return;
+  }
+  const pick=e=>plattScale(e.rawP)>=0.5?1:0;
+  const hit=e=>pick(e)===e.result;
+  const tier=e=>{const ed=Math.abs(plattScale(e.rawP)-0.5); return ed>=0.15?'High':ed>=0.10?'Medium':ed>=0.05?'Low':'Toss-up';};
+  function rec(arr){const w=arr.filter(hit).length;return {w,l:arr.length-w,n:arr.length,pct:arr.length?Math.round(w/arr.length*100):0};}
+  const all=rec(labeled);
+  // by confidence tier
+  const tiers=['High','Medium','Low','Toss-up'].map(t=>({t,...rec(labeled.filter(e=>tier(e)===t))})).filter(x=>x.n>0);
+  // last 14 days
+  const cut=new Date(); cut.setDate(cut.getDate()-14);
+  const cutStr=cut.toISOString().slice(0,10);
+  const recent=rec(labeled.filter(e=>e.date>=cutStr));
+  // confident-only (edge>10%) — the actionable subset
+  const conf=rec(labeled.filter(e=>Math.abs(plattScale(e.rawP)-0.5)>=0.10));
+  const tierRows=tiers.map(x=>`<div class="tr-row"><span>${x.t} confidence</span><span><b>${x.w}–${x.l}</b> (${x.pct}%)</span></div>`).join('');
+  el.innerHTML=`<div class="tr-wrap">
+    <div class="tr-head">📈 Live Track Record <span class="tr-sub">${all.n} graded games · auto-updated from real results</span></div>
+    <div class="tr-kpis">
+      <div class="tr-kpi"><div class="tr-big">${all.pct}%</div><div class="tr-lbl">Overall ${all.w}–${all.l}</div></div>
+      <div class="tr-kpi"><div class="tr-big ${conf.pct>=58?'tr-good':''}">${conf.n?conf.pct+'%':'—'}</div><div class="tr-lbl">Confident picks ${conf.w}–${conf.l}</div></div>
+      <div class="tr-kpi"><div class="tr-big">${recent.n?recent.pct+'%':'—'}</div><div class="tr-lbl">Last 14d ${recent.w}–${recent.l}</div></div>
+    </div>
+    <div class="tr-tiers">${tierRows}</div>
+    <div class="tr-foot">Pick = calibrated model favorite. Buckets show whether confidence translates to live accuracy. Backtest expectation: ~57% overall, 60–66% confident. Sample grows daily.</div>
+  </div>`;
 }
 
 // ── Log result and update UI ──────────────────────────────────────
@@ -2114,6 +2167,7 @@ async function init(){
   renderBestBets(container, hdr);
   const _nnSb=document.getElementById('nn-stats-bar');
   if(_nnSb) _nnSb.innerHTML=buildNNStatText();
+  buildTrackRecord();   // refresh the (hidden) track-record panel with latest results
 }
 
 // Build the "Today's Best Bets" strip from BEST_BETS, insert after the header.
@@ -2150,6 +2204,14 @@ function renderBestBets(container, hdr){
 
 document.addEventListener('DOMContentLoaded', init);
 document.getElementById('refresh-btn').addEventListener('click', init);
+// Toggle the live track-record panel when the model stats bar is clicked
+(function(){
+  const bar=document.getElementById('nn-stats-bar'), panel=document.getElementById('track-record');
+  if(bar&&panel) bar.addEventListener('click',()=>{
+    if(panel.style.display==='none'){ buildTrackRecord(); panel.style.display='block'; }
+    else panel.style.display='none';
+  });
+})();
 </script>
 </body>
 </html>
