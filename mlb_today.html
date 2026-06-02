@@ -1861,7 +1861,10 @@ async function fetchSharpOdds(){
     if(cached && (Date.now()-cached.ts) < ODDS_CACHE_MIN*60000){ sharpOdds=cached.map; return; }
   }catch(e){}
   try{
-    const url=`https://api.the-odds-api.com/v4/sports/baseball_mlb/odds/?apiKey=${ODDS_API_KEY}&regions=us&markets=h2h&oddsFormat=decimal`;
+    // Odds come through YOUR Cloudflare Worker (key lives there as a secret).
+    // Fall back to a direct call only if a key is hardcoded (legacy/dev).
+    const url = KALSHI_PROXY ? `${KALSHI_PROXY}?odds=mlb`
+      : `https://api.the-odds-api.com/v4/sports/baseball_mlb/odds/?apiKey=${ODDS_API_KEY}&regions=us&markets=h2h&oddsFormat=decimal`;
     const r=await fetch(url); if(!r.ok) return;
     const games=await r.json(); const map={};
     for(const g of games){
