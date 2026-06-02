@@ -90,6 +90,17 @@
       border-radius:12px;padding:2px 10px;font-size:.7rem;
     }
 
+    /* ── Sort / filter controls ── */
+    .game-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:2px 2px 4px;}
+    .gc-lbl{font-size:.68rem;text-transform:uppercase;letter-spacing:.06em;color:var(--dim2);margin-left:4px}
+    .gc-sel{background:var(--card2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:3px 8px;font-size:.74rem;cursor:pointer}
+    .gc-tog{background:var(--card2);color:var(--dim);border:1px solid var(--border);border-radius:8px;padding:3px 11px;font-size:.74rem;font-weight:600;cursor:pointer}
+    .gc-tog.active{background:rgba(96,165,250,.18);color:#93c5fd;border-color:rgba(96,165,250,.4)}
+    /* de-emphasize live & final games so pregame (actionable) stands out */
+    .game-card.gc-final{opacity:.62}
+    .game-card.gc-live{opacity:.82}
+    .game-card.gc-final:hover, .game-card.gc-live:hover{opacity:1}
+
     /* ── Today's Best Bets summary card ── */
     .best-bets{
       background:linear-gradient(180deg,#0c1a12,#0b1320);
@@ -1796,6 +1807,12 @@ function renderGame(game, extras){
 
 
   card.innerHTML = html;
+  // Sort/filter metadata for the controls bar
+  card.classList.add(_isFinal?'gc-final':_isLive?'gc-live':'gc-pre');
+  card.dataset.status = _isFinal?'final':_isLive?'live':'pre';
+  card.dataset.time   = String(new Date(gameTime).getTime()||0);
+  card.dataset.edge   = String(Math.abs(modelHomeP-0.5).toFixed(4));   // model confidence
+  card.dataset.value  = String((bet && !_isFinal && !_isLive) ? (bet.roi||0).toFixed(4) : -1); // model-value ROI, else -1
   card.querySelector('.card-header').addEventListener('click',()=>card.classList.toggle('expanded'));
   card.querySelector('.edge-row').addEventListener('click',()=>card.classList.toggle('expanded'));
   card.querySelectorAll('.nn-log-btn').forEach(btn=>{
@@ -2144,6 +2161,22 @@ async function init(){
     </div>`;
   container.appendChild(hdr);
 
+  // ── Sort / filter controls ──
+  const ctrls=document.createElement('div');
+  ctrls.className='game-controls';
+  ctrls.innerHTML=`
+    <span class="gc-lbl">Sort</span>
+    <select id="gc-sort" class="gc-sel">
+      <option value="time">Start time</option>
+      <option value="value">Model value</option>
+      <option value="edge">Model confidence</option>
+    </select>
+    <span class="gc-lbl">Show</span>
+    <button class="gc-tog active" data-f="pre">Pregame</button>
+    <button class="gc-tog active" data-f="live">Live</button>
+    <button class="gc-tog" data-f="final">Final</button>`;
+  container.appendChild(ctrls);
+
   const sorted=[...mlbGames].sort((a,b)=>{
     const aH=!!kalshiMap[a.gamePk],bH=!!kalshiMap[b.gamePk];
     if(aH!==bH) return bH-aH;
@@ -2168,9 +2201,34 @@ async function init(){
   });
   // ── Today's Best Bets summary card (inserted right after the header) ─────────
   renderBestBets(container, hdr);
+  wireGameControls(container, ctrls);
   const _nnSb=document.getElementById('nn-stats-bar');
   if(_nnSb) _nnSb.innerHTML=buildNNStatText();
   buildTrackRecord();   // refresh the (hidden) track-record panel with latest results
+}
+
+// Sort/filter the rendered game cards in place (no re-fetch).
+function wireGameControls(container, ctrls){
+  const sortSel=ctrls.querySelector('#gc-sort');
+  const togs=[...ctrls.querySelectorAll('.gc-tog')];
+  function apply(){
+    const show=new Set(togs.filter(t=>t.classList.contains('active')).map(t=>t.dataset.f));
+    const cards=[...container.querySelectorAll('.game-card')];
+    // filter
+    cards.forEach(c=> c.style.display = show.has(c.dataset.status)?'':'none');
+    // sort visible
+    const mode=sortSel.value;
+    const vis=cards.filter(c=>c.style.display!=='none');
+    vis.sort((a,b)=>{
+      if(mode==='time')  return (+a.dataset.time)-(+b.dataset.time);
+      if(mode==='value') return (+b.dataset.value)-(+a.dataset.value);
+      return (+b.dataset.edge)-(+a.dataset.edge);   // confidence
+    });
+    vis.forEach(c=>container.appendChild(c));   // re-append in order (after hdr/cards stay last)
+  }
+  sortSel.addEventListener('change', apply);
+  togs.forEach(t=>t.addEventListener('click',()=>{ t.classList.toggle('active'); apply(); }));
+  apply();   // initial: hides Final (its toggle starts inactive)
 }
 
 // Build the "Today's Best Bets" strip from BEST_BETS, insert after the header.
