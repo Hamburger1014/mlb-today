@@ -158,6 +158,7 @@
     .proj-score{margin-top:9px;text-align:center;font-size:.82rem;color:var(--text);
       background:rgba(96,165,250,.08);border:1px solid rgba(96,165,250,.22);border-radius:8px;padding:5px 8px}
     .proj-score b{color:#93c5fd;font-weight:800;letter-spacing:.02em}
+    .proj-note{display:inline-block;margin-left:6px;font-size:.7rem;color:#fbbf24;font-weight:600;cursor:help}
     .cp-home{background:rgba(58,138,232,.15);color:#60a5fa;border:1px solid rgba(58,138,232,.3)}
     .cp-away{background:rgba(232,23,77,.12);color:#f87171;border:1px solid rgba(232,23,77,.25)}
     .cp-even{background:rgba(138,155,176,.1);color:var(--dim);border:1px solid rgba(138,155,176,.2)}
@@ -349,10 +350,10 @@ const MLB_LOGO    = id => `https://www.mlbstatic.com/team-logos/${id}.svg`;
 // ═══════════════════════════════════════════════════════════════
 const ESPN_TO_MLB = {
   'SF':'SFG','KC':'KCR','TB':'TBR','SD':'SDP','WAS':'WSH','AZ':'ARI',
-  'CWS':'CWS','NYY':'NYY','NYM':'NYM','LAD':'LAD','LAA':'LAA','BOS':'BOS',
+  'CWS':'CWS','CHW':'CWS','NYY':'NYY','NYM':'NYM','LAD':'LAD','LAA':'LAA','BOS':'BOS',
   'HOU':'HOU','ATL':'ATL','PHI':'PHI','MIL':'MIL','CHC':'CHC','STL':'STL',
   'SEA':'SEA','TOR':'TOR','BAL':'BAL','CLE':'CLE','TEX':'TEX','DET':'DET',
-  'MIN':'MIN','PIT':'PIT','CIN':'CIN','COL':'COL','MIA':'MIA','OAK':'OAK',
+  'MIN':'MIN','PIT':'PIT','CIN':'CIN','COL':'COL','MIA':'MIA','OAK':'OAK','ATH':'OAK',
 };
 function normAbbr(a){ return ESPN_TO_MLB[a] || a; }
 
@@ -1328,13 +1329,22 @@ function renderGame(game, extras){
   const homeKBBq = starterKBB[game.homeSpId] ?? null;
   const awayKBBq = starterKBB[game.awaySpId] ?? null;
   const modelResult = modelPredictEnhanced(homeAbbr, awayAbbr, homeKBBq, awayKBBq);
-  // Projected score (expected runs) — backtested MAE ~2.5/team
-  const proj = projectScore(homeAbbr, awayAbbr, homeKBBq, awayKBBq);
-  const projHtml = proj
-    ? `<div class="proj-score" title="Model's expected runs (backtest MAE ≈2.5/team). Not an exact final.">&#x1F52E; Projected: <b>${awayAbbr} ${proj.away.toFixed(1)} – ${proj.home.toFixed(1)} ${homeAbbr}</b></div>`
-    : '';
   let modelHomeP = modelResult.p ?? 0.5;
   const pitcherAdjActive = modelResult.pitcherAdjActive;
+  // Projected score (expected runs) — backtested MAE ~2.5/team.
+  // Note: the run projection and the win pick can disagree (~13% of games) —
+  // scoring more runs ON AVERAGE isn't the same as being likelier to win a
+  // single game (run variance + the starter's win-prob impact differ). Flag it.
+  const proj = projectScore(homeAbbr, awayAbbr, homeKBBq, awayKBBq);
+  let projHtml = '';
+  if(proj){
+    const projHomeMore = proj.home > proj.away;
+    const winHome = modelHomeP >= 0.5;
+    const note = (projHomeMore !== winHome)
+      ? ` <span class="proj-note" title="The win model favors the other side despite the run projection — usually the starting pitcher matchup. Both can be right: more expected runs ≠ more likely to win one game.">⚠ win model leans ${winHome?homeAbbr:awayAbbr}</span>`
+      : '';
+    projHtml = `<div class="proj-score" title="Model's expected runs (backtest MAE ≈2.5/team). Not an exact final.">&#x1F52E; Projected: <b>${awayAbbr} ${proj.away.toFixed(1)} – ${proj.home.toFixed(1)} ${homeAbbr}</b>${note}</div>`;
+  }
   const parkAdjActive    = modelResult.parkAdjActive;
   if(game.gamePk && modelResult.rawP!=null) nnLogPrediction(game.gamePk, modelResult.rawP, homeAbbr, awayAbbr);
 
