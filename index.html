@@ -90,6 +90,26 @@
       border-radius:12px;padding:2px 10px;font-size:.7rem;
     }
 
+    /* ── Today's Best Bets summary card ── */
+    .best-bets{
+      background:linear-gradient(180deg,#0c1a12,#0b1320);
+      border:1px solid rgba(34,197,94,.3);border-radius:14px;
+      padding:13px 16px;margin:2px 0 6px;
+    }
+    .bb-title{font-size:.82rem;font-weight:800;color:#86efac;letter-spacing:.02em;margin-bottom:8px;display:flex;align-items:center;gap:8px}
+    .bb-count{background:rgba(34,197,94,.2);color:#86efac;border-radius:10px;padding:1px 9px;font-size:.72rem}
+    .bb-empty{font-size:.8rem;color:var(--dim2)}
+    .bb-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:5px 0;border-top:1px solid rgba(255,255,255,.05);font-size:.8rem}
+    .bb-row:first-of-type{border-top:none}
+    .bb-mu{font-weight:700;color:var(--dim2);min-width:78px}
+    .bb-pick{font-weight:800;color:var(--text)}
+    .bb-tot .bb-pick{color:#93c5fd}
+    .bb-edge{color:var(--green);font-weight:700}
+    .bb-stake{color:var(--dim);font-size:.74rem;margin-left:auto}
+    .bb-ok{color:var(--green);font-size:.7rem}
+    .bb-warn{color:#fbbf24;font-size:.7rem}
+    .bb-foot{font-size:.66rem;color:var(--dim2);margin-top:8px;line-height:1.4}
+
     /* ── Game card ── */
     .game-card{
       background:var(--card);border:1px solid var(--border);border-radius:14px;
@@ -159,6 +179,10 @@
       background:rgba(96,165,250,.08);border:1px solid rgba(96,165,250,.22);border-radius:8px;padding:5px 8px}
     .proj-score b{color:#93c5fd;font-weight:800;letter-spacing:.02em}
     .proj-note{display:inline-block;margin-left:6px;font-size:.7rem;color:#fbbf24;font-weight:600;cursor:help}
+    .proj-tot{color:var(--dim2);font-size:.74rem;font-weight:600}
+    .ou-lean{display:inline-block;margin-left:6px;font-size:.7rem;font-weight:700;cursor:help;
+      padding:1px 7px;border-radius:8px;background:rgba(138,155,176,.12);color:var(--dim)}
+    .ou-lean.ou-strong{background:rgba(96,165,250,.15);color:#93c5fd}
     .cp-home{background:rgba(58,138,232,.15);color:#60a5fa;border:1px solid rgba(58,138,232,.3)}
     .cp-away{background:rgba(232,23,77,.12);color:#f87171;border:1px solid rgba(232,23,77,.25)}
     .cp-even{background:rgba(138,155,176,.1);color:var(--dim);border:1px solid rgba(138,155,176,.2)}
@@ -598,6 +622,7 @@ function projectScore(homeAbbr,awayAbbr,homeKBBq=null,awayKBBq=null,p=null){
 
 // ── Live starter K-BB% qualities (one batched statsapi call) ─────────────
 let starterKBB = {};   // pitcher id -> regressed K-BB% quality
+let BEST_BETS = [];    // collected per-render: pregame model-value plays + strong totals leans
 async function fetchStarterKBB(pitcherIds){
   const ids=[...new Set((pitcherIds||[]).filter(Boolean))];
   for(let i=0;i<ids.length;i+=100){
@@ -1362,8 +1387,22 @@ function renderGame(game, extras){
   // matches the model pick (run total from the score environment, split by the
   // model's win prob). Backtested run MAE ~2.44/team, 100% consistent.
   const proj = projectScore(homeAbbr, awayAbbr, homeKBBq, awayKBBq, modelHomeP);
+  // Totals lean: projected total vs Vegas O/U. Backtest shows directional skill
+  // mainly when the gap is large (≥1 run); the UNDER side is the stronger signal.
+  const projTotal = proj ? (proj.home + proj.away) : null;
+  const ouLine = (odds && odds.overUnder) ? parseFloat(odds.overUnder) : null;
+  let totalsLean = null; // {side:'OVER'|'UNDER', gap, strong}
+  if(projTotal!=null && ouLine!=null && !isNaN(ouLine)){
+    const gap = projTotal - ouLine;
+    if(Math.abs(gap) >= 0.6){
+      totalsLean = { side: gap>0?'OVER':'UNDER', gap:Math.abs(gap), strong:Math.abs(gap)>=1.0 };
+    }
+  }
+  const leanHtml = totalsLean
+    ? ` <span class="ou-lean ${totalsLean.strong?'ou-strong':''}" title="Projected total ${projTotal.toFixed(1)} vs Vegas O/U ${ouLine}. Directional lean only — the UNDER signal backtests stronger than OVER.">${totalsLean.side==='OVER'?'▲':'▼'} ${totalsLean.side} lean (${projTotal.toFixed(1)} vs ${ouLine})</span>`
+    : '';
   const projHtml = proj
-    ? `<div class="proj-score" title="Expected runs, consistent with the win model (favored team always projects higher). Backtest MAE ≈2.4/team — not an exact final.">&#x1F52E; Projected: <b>${awayAbbr} ${proj.away.toFixed(1)} – ${proj.home.toFixed(1)} ${homeAbbr}</b></div>`
+    ? `<div class="proj-score" title="Expected runs, consistent with the win model (favored team always projects higher). Backtest MAE ≈2.4/team — not an exact final.">&#x1F52E; Projected: <b>${awayAbbr} ${proj.away.toFixed(1)} – ${proj.home.toFixed(1)} ${homeAbbr}</b> <span class="proj-tot">· total ${projTotal.toFixed(1)}</span>${leanHtml}</div>`
     : '';
   const parkAdjActive    = modelResult.parkAdjActive;
   if(game.gamePk && modelResult.rawP!=null) nnLogPrediction(game.gamePk, modelResult.rawP, homeAbbr, awayAbbr);
@@ -1421,7 +1460,16 @@ function renderGame(game, extras){
       betBadgeHtml = `<span class="bet-badge bet-badge-live">&#x23F1;&#xFE0F; LIVE — model stale, not a pregame edge</span>`;
     }else{
       betBadgeHtml = `<span class="bet-badge">&#x1F3AF; MODEL VALUE ${bet.team} · ${(bet.fair*100).toFixed(0)}% vs ${(bet.price*100).toFixed(0)}&cent; · stake ${(bet.stakeFrac*100).toFixed(1)}%${tag}</span>`;
+      // Collect for the "Today's Best Bets" summary card (pregame value plays only)
+      BEST_BETS.push({ matchup:`${awayAbbr}@${homeAbbr}`, team:bet.team, fair:bet.fair,
+        price:bet.price, roi:bet.roi, stakeFrac:bet.stakeFrac, gamePk:game.gamePk,
+        booksAgree: fairHomeSharp!=null ? booksAgree : null });
     }
+  }
+  // Collect strong totals leans (≥1 run gap) for the summary card too
+  if(totalsLean && totalsLean.strong && !_isFinal && !_isLive){
+    BEST_BETS.push({ matchup:`${awayAbbr}@${homeAbbr}`, totals:true,
+      side:totalsLean.side, projTotal, ouLine, gap:totalsLean.gap });
   }
 
   // Pitchers from ESPN (re-use from early extraction)
@@ -2046,6 +2094,7 @@ async function init(){
     return new Date(a.gameTime)-new Date(b.gameTime);
   });
 
+  BEST_BETS.length=0;   // reset before rendering populates it
   sorted.forEach(g=>{
     try{
     const idx=mlbGames.indexOf(g);
@@ -2061,8 +2110,42 @@ async function init(){
     container.appendChild(card);
     }catch(e){ console.error('renderGame failed for',g.homeAbbr,'vs',g.awayAbbr,e); }
   });
+  // ── Today's Best Bets summary card (inserted right after the header) ─────────
+  renderBestBets(container, hdr);
   const _nnSb=document.getElementById('nn-stats-bar');
   if(_nnSb) _nnSb.innerHTML=buildNNStatText();
+}
+
+// Build the "Today's Best Bets" strip from BEST_BETS, insert after the header.
+function renderBestBets(container, hdr){
+  const valuePlays = BEST_BETS.filter(b=>!b.totals).sort((a,b)=>b.roi-a.roi);
+  const totalPlays = BEST_BETS.filter(b=>b.totals).sort((a,b)=>b.gap-a.gap);
+  const card=document.createElement('div');
+  card.className='best-bets';
+  if(!valuePlays.length && !totalPlays.length){
+    card.innerHTML=`<div class="bb-title">&#x1F3AF; Today's Best Bets</div>
+      <div class="bb-empty">No pregame model edges vs the market today — the model agrees with Kalshi. Sit tight.</div>`;
+  }else{
+    let rows='';
+    for(const b of valuePlays.slice(0,6)){
+      const ck = b.booksAgree===true?' <span class="bb-ok">✓ books</span>':b.booksAgree===false?' <span class="bb-warn">⚠ books</span>':'';
+      rows+=`<div class="bb-row"><span class="bb-mu">${b.matchup}</span>
+        <span class="bb-pick">${b.team} ML</span>
+        <span class="bb-edge">+${(b.roi*100).toFixed(0)}% ROI</span>
+        <span class="bb-stake">${(b.stakeFrac*100).toFixed(1)}% bankroll</span>${ck}</div>`;
+    }
+    for(const b of totalPlays.slice(0,4)){
+      rows+=`<div class="bb-row bb-tot"><span class="bb-mu">${b.matchup}</span>
+        <span class="bb-pick">${b.side==='OVER'?'▲ OVER':'▼ UNDER'} ${b.ouLine}</span>
+        <span class="bb-edge">proj ${b.projTotal.toFixed(1)}</span>
+        <span class="bb-stake">${b.gap.toFixed(1)} run gap</span></div>`;
+    }
+    const n=valuePlays.length+totalPlays.length;
+    card.innerHTML=`<div class="bb-title">&#x1F3AF; Today's Best Bets <span class="bb-count">${n}</span></div>
+      ${rows}
+      <div class="bb-foot">Moneyline = model prob beats Kalshi price after fees. Totals = projected total vs Vegas O/U (≥1 run gap; UNDER signal backtests stronger). Not financial advice.</div>`;
+  }
+  hdr.insertAdjacentElement('afterend', card);
 }
 
 document.addEventListener('DOMContentLoaded', init);
