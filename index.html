@@ -162,6 +162,20 @@
     .game-time{font-size:.72rem;color:var(--dim);text-align:center}
     .at-badge{font-size:.72rem;font-weight:700;color:var(--dim2);background:var(--card2);border:1px solid var(--border);border-radius:5px;padding:2px 7px}
     .mkt-status-badge{font-size:.62rem;padding:2px 6px;border-radius:8px;font-weight:600;margin-top:1px}
+    /* ── Live score elements ── */
+    .live-score{font-size:1.15rem;font-weight:800;color:var(--dim);margin:0 6px;min-width:18px;text-align:center}
+    .live-score.winning{color:var(--text)}
+    .live-inn{font-size:.74rem;font-weight:700;color:#f87171;text-align:center}
+    .live-outs{font-size:.62rem;color:var(--dim);text-align:center}
+    .live-final{font-size:.72rem;font-weight:800;color:var(--dim);letter-spacing:.04em}
+    .bases{position:relative;display:inline-block;width:22px;height:16px;margin:1px 0}
+    .bases .b{position:absolute;width:7px;height:7px;background:transparent;border:1px solid var(--dim2);transform:rotate(45deg)}
+    .bases .b.on{background:#fbbf24;border-color:#fbbf24}
+    .bases .b1{right:0;top:4px}
+    .bases .b2{left:50%;top:0;margin-left:-3.5px}
+    .bases .b3{left:0;top:4px}
+    @keyframes livepulse{0%,100%{opacity:1}50%{opacity:.45}}
+    .badge-live-mkt .live-dot, .live-inn{animation:none}
     .badge-live-mkt{background:rgba(168,85,247,.2);color:#c084fc;border:1px solid rgba(168,85,247,.35)}
     .badge-no-mkt{background:rgba(100,120,140,.1);color:var(--dim2);border:1px solid rgba(100,120,140,.2)}
 
@@ -1087,7 +1101,7 @@ async function loadMLBData(){
 async function loadMLBSchedule(){
   const d=new Date();
   const today=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-  const data=await mlbFetch(`/schedule?sportId=1&date=${today}&gameType=R&hydrate=team,probablePitcher`);
+  const data=await mlbFetch(`/schedule?sportId=1&date=${today}&gameType=R&hydrate=team,probablePitcher,linescore`);
   const games=[];
   for(const date of data.dates||[]){
     for(const g of date.games||[]){
@@ -1104,10 +1118,27 @@ async function loadMLBSchedule(){
         gameTime:  g.gameDate,
         status:    g.status?.abstractGameState||'',
         statusDetail: g.status?.detailedState||'',
+        live:      extractLive(g),
       });
     }
   }
   return games;
+}
+
+// Pull the live scoreboard bits from a schedule game (score, inning, outs, bases)
+function extractLive(g){
+  const hs=g.teams?.home?.score, as=g.teams?.away?.score;
+  const ls=g.linescore||{};
+  const off=ls.offense||{};
+  return {
+    homeScore: (hs==null?null:hs), awayScore: (as==null?null:as),
+    inning: ls.currentInning||null,
+    inningOrdinal: ls.currentInningOrdinal||null,
+    isTop: ls.isTopInning===true,
+    inningState: ls.inningState||ls.inningHalf||'',
+    outs: (ls.outs==null?null:ls.outs),
+    onBase: { first:!!off.first, second:!!off.second, third:!!off.third },
+  };
 }
 
 // ESPN standings fallback — populates teamStats W/L when MLB Stats API is unavailable
@@ -1648,11 +1679,37 @@ function renderGame(game, extras){
     </div>`;
   }
 
-  const statusBadge = (status==='Live'||status==='In Progress')
-    ? '<span class="mkt-status-badge badge-live-mkt">LIVE</span>'
-    : hasMarket
-      ? '<span class="mkt-status-badge badge-live-mkt">&#x26A1; Market</span>'
-      : '<span class="mkt-status-badge badge-no-mkt">No Market</span>';
+  const _lv = game.live || {};
+  const _hasScore = _lv.homeScore!=null && _lv.awayScore!=null;
+  const _gameLive = status==='Live' || status==='In Progress';
+  const _gameFinal = status==='Final';
+  // Live/final scoreboard for the center column
+  let scoreCenterHtml='';
+  if(_hasScore && (_gameLive || _gameFinal)){
+    if(_gameFinal){
+      scoreCenterHtml = `<div class="live-final">FINAL${_lv.inning&&_lv.inning!==9?` · ${_lv.inning}`:''}</div>`;
+    }else{
+      const arrow = _lv.isTop?'▲':'▼';
+      const inn = _lv.inningOrdinal||(_lv.inning?_lv.inning+'':'');
+      const outs = _lv.outs!=null?`${_lv.outs} out${_lv.outs===1?'':'s'}`:'';
+      // diamond of bases
+      const b=_lv.onBase||{};
+      const diamond = `<span class="bases" title="Runners on base">`+
+        `<span class="b b2${b.second?' on':''}"></span>`+
+        `<span class="b b3${b.third?' on':''}"></span><span class="b b1${b.first?' on':''}"></span></span>`;
+      scoreCenterHtml = `<div class="live-inn">${arrow} ${inn}</div>${diamond}<div class="live-outs">${outs}</div>`;
+    }
+  }
+  const statusBadge = _gameLive
+    ? '<span class="mkt-status-badge badge-live-mkt">&#x1F534; LIVE</span>'
+    : _gameFinal
+      ? '<span class="mkt-status-badge badge-no-mkt">FINAL</span>'
+      : hasMarket
+        ? '<span class="mkt-status-badge badge-live-mkt">&#x26A1; Market</span>'
+        : '<span class="mkt-status-badge badge-no-mkt">No Market</span>';
+  // Score chips shown next to each team's record when game has started
+  const awayScoreHtml = _hasScore ? `<span class="live-score${_lv.awayScore>_lv.homeScore?' winning':''}">${_lv.awayScore}</span>` : '';
+  const homeScoreHtml = _hasScore ? `<span class="live-score${_lv.homeScore>_lv.awayScore?' winning':''}">${_lv.homeScore}</span>` : '';
 
   const hRec=fmtRec(hStat.wins,hStat.losses);
   const aRec=fmtRec(aStat.wins,aStat.losses);
@@ -1677,16 +1734,17 @@ function renderGame(game, extras){
         <div class="team-logo-name">
           <img class="team-logo" src="${MLB_LOGO(awayId)}" alt="${awayAbbr}" onerror="this.style.display='none'"/>
           <span class="team-name">${awayAbbr}</span>
+          ${awayScoreHtml}
         </div>
         <span class="team-record">${aRec}${aStat.streak?' &middot; '+aStat.streak:''}</span>
       </div>
       <div class="game-center">
-        <div class="at-badge">@</div>
-        <div class="game-time">${fmtTime(gameTime)||status||''}</div>
+        ${scoreCenterHtml || `<div class="at-badge">@</div><div class="game-time">${fmtTime(gameTime)||status||''}</div>`}
         ${statusBadge}
       </div>
       <div class="team-side home">
         <div class="team-logo-name">
+          ${homeScoreHtml}
           <span class="team-name">${homeAbbr}</span>
           <img class="team-logo" src="${MLB_LOGO(homeId)}" alt="${homeAbbr}" onerror="this.style.display='none'"/>
         </div>
@@ -1835,6 +1893,7 @@ function renderGame(game, extras){
 
   card.innerHTML = html;
   // Sort/filter metadata for the controls bar
+  card.dataset.gpk    = String(game.gamePk||'');
   card.classList.add(_isFinal?'gc-final':_isLive?'gc-live':'gc-pre');
   card.dataset.status = _isFinal?'final':_isLive?'live':'pre';
   card.dataset.time   = String(new Date(gameTime).getTime()||0);
@@ -2232,6 +2291,57 @@ async function init(){
   const _nnSb=document.getElementById('nn-stats-bar');
   if(_nnSb) _nnSb.innerHTML=buildNNStatText();
   buildTrackRecord();   // refresh the (hidden) track-record panel with latest results
+  startLiveScorePolling();   // keep scores fresh without re-running the model
+}
+
+// ── LIVE SCORE POLLING ───────────────────────────────────────────────────────
+// Every 45s re-fetch just the schedule (scores+inning) and patch the score
+// elements on each card in place — no model recompute, no full re-render.
+let _liveTimer=null;
+function startLiveScorePolling(){
+  if(_liveTimer) clearInterval(_liveTimer);
+  _liveTimer=setInterval(refreshLiveScores, 45000);
+}
+async function refreshLiveScores(){
+  try{
+    const games=await loadMLBSchedule();   // light: schedule+linescore only
+    let anyLive=false;
+    for(const g of games){
+      const card=document.querySelector(`.game-card[data-gpk="${g.gamePk}"]`);
+      if(!card) continue;
+      patchCardScore(card, g);
+      if(g.status==='Live'||g.status==='In Progress') anyLive=true;
+    }
+    if(!anyLive){ clearInterval(_liveTimer); _liveTimer=null; }  // all done for the day
+  }catch(e){ /* transient; try again next tick */ }
+}
+function patchCardScore(card, g){
+  const lv=g.live||{}; if(lv.homeScore==null||lv.awayScore==null) return;
+  const live = g.status==='Live'||g.status==='In Progress';
+  const final= g.status==='Final';
+  if(!live && !final) return;
+  // score chips
+  const aS=card.querySelector('.team-side.away .live-score');
+  const hS=card.querySelector('.team-side.home .live-score');
+  if(aS){ aS.textContent=lv.awayScore; aS.classList.toggle('winning',lv.awayScore>lv.homeScore); }
+  if(hS){ hS.textContent=lv.homeScore; hS.classList.toggle('winning',lv.homeScore>lv.awayScore); }
+  // center scoreboard
+  const center=card.querySelector('.game-center');
+  if(center){
+    const badge = live?'<span class="mkt-status-badge badge-live-mkt">&#x1F534; LIVE</span>'
+                      :'<span class="mkt-status-badge badge-no-mkt">FINAL</span>';
+    if(final){
+      center.innerHTML=`<div class="live-final">FINAL${lv.inning&&lv.inning!==9?` · ${lv.inning}`:''}</div>${badge}`;
+      card.dataset.status='final'; card.classList.remove('gc-live','gc-pre'); card.classList.add('gc-final');
+    }else{
+      const arrow=lv.isTop?'▲':'▼', inn=lv.inningOrdinal||(lv.inning?lv.inning+'':'');
+      const outs=lv.outs!=null?`${lv.outs} out${lv.outs===1?'':'s'}`:'';
+      const b=lv.onBase||{};
+      const diamond=`<span class="bases"><span class="b b2${b.second?' on':''}"></span><span class="b b3${b.third?' on':''}"></span><span class="b b1${b.first?' on':''}"></span></span>`;
+      center.innerHTML=`<div class="live-inn">${arrow} ${inn}</div>${diamond}<div class="live-outs">${outs}</div>${badge}`;
+      card.dataset.status='live'; card.classList.remove('gc-pre'); card.classList.add('gc-live');
+    }
+  }
 }
 
 // Sort/filter the rendered game cards in place (no re-fetch).
