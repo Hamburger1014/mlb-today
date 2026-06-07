@@ -2012,6 +2012,7 @@ function evaluateBet(fairHome, asks, homeAbbr, awayAbbr){
   let best=null;
   for(const s of sides){
     if(s.price==null||s.price<=0.01||s.price>=0.99) continue;
+    if(s.fair < 0.5) continue;   // only bet a team the MODEL actually favors
     const fee=KALSHI_FEE*s.price*(1-s.price);
     const netEV=s.fair - s.price - fee;             // $ per contract (face $1)
     const roi=netEV/s.price;                          // return on risked capital
