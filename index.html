@@ -676,17 +676,20 @@ function projectScore(homeAbbr,awayAbbr,homeKBBq=null,awayKBBq=null,p=null){
   return { home:Math.max(0.5,s.home), away:Math.max(0.5,s.away) };
 }
 
-// ── WEATHER-AWARE TOTAL (dedicated model) ─────────────────────────────────
-//   Predicts the GAME TOTAL directly from team off/def rates, park, both
-//   starters' K-BB%, plus live temperature & wind. Backtested total MAE 3.48
-//   and ~61% directional O/U skill (vs league avg). Used for the projected
-//   total + O/U lean; the home/away split still comes from the win model.
+// ── WEATHER-AWARE TOTAL (dedicated model v2) ──────────────────────────────
+//   Predicts the GAME TOTAL from team off/def rates, park, both starters'
+//   K-BB%, live temp+wind, combined BULLPEN ERA, and combined starter avg-outs.
+//   Backtest total MAE 3.48, ~61.8% O/U directional skill (vs league avg;
+//   robust both seasons). Total only; home/away split still from the win model.
 const TOTALS_MODEL = {
-  coef:[0.51618,0.14842,7.15671,-5.71701,0.03655,0.01987], // combOff,combDef,park,combKBB,tempF,windMph
-  intercept:-5.45052, shrinkK:50,
+  // combOff,combDef,park,combKBB,tempF,windMph,combBullpenERA,combSPouts
+  coef:[0.52856,-0.02546,7.12931,-5.79135,0.03671,0.01957,0.11708,0.00663],
+  intercept:-5.1455, shrinkK:50, penFallback:4.10, spOutsFallback:16.0,
 };
-let gameWeather = {};   // "homeAbbr" or gamePk -> {t,w}; filled by fetchWeather()
-function totalModel(homeAbbr,awayAbbr,homeKBBq,awayKBBq,wx){
+let gameWeather = {};   // gamePk -> {t,w}
+let teamBullpenERA = {};// teamAbbr -> season bullpen ERA (fetchBullpen)
+let starterOuts = {};   // pitcher id -> avg outs/start (set in fetchStarterKBB)
+function totalModel(homeAbbr,awayAbbr,homeKBBq,awayKBBq,wx,game){
   const h=teamStats[homeAbbr],a=teamStats[awayAbbr];
   if(!h||!a) return null;
   const hg=h.wins+h.losses, ag=a.wins+a.losses;
@@ -696,10 +699,23 @@ function totalModel(homeAbbr,awayAbbr,homeKBBq,awayKBBq,wx){
   const aOff=(a.rs+lg*k)/(ag+k), aDef=(a.ra+lg*k)/(ag+k);
   const combKBB=(homeKBBq!=null?homeKBBq:lk)+(awayKBBq!=null?awayKBBq:lk);
   const temp=wx?wx.t:72, wind=wx?wx.w:5;
-  const f=[hOff+aOff, hDef+aDef, (PARK_FACTORS[homeAbbr]||1.0), combKBB, temp, wind];
+  const combBP=(teamBullpenERA[homeAbbr]??TOTALS_MODEL.penFallback)+(teamBullpenERA[awayAbbr]??TOTALS_MODEL.penFallback);
+  const so=TOTALS_MODEL.spOutsFallback;
+  const combSP=(starterOuts[game&&game.homeSpId]??so)+(starterOuts[game&&game.awaySpId]??so);
+  const f=[hOff+aOff, hDef+aDef, (PARK_FACTORS[homeAbbr]||1.0), combKBB, temp, wind, combBP, combSP];
   const c=TOTALS_MODEL.coef;
   let z=TOTALS_MODEL.intercept; for(let i=0;i<f.length;i++) z+=c[i]*f[i];
   return Math.max(4.0, z);
+}
+// Team bullpen (relief) ERA, season-to-date — one batched statsapi call.
+async function fetchBullpen(){
+  try{
+    const d=await mlbFetch(`/teams/stats?stats=season&group=pitching&season=${SEASON}&sportId=1&sitCodes=rp`);
+    for(const s of ((d.stats||[])[0]?.splits||[])){
+      const ab=teamById[s.team?.id]?.abbr; const era=parseFloat(s.stat?.era);
+      if(ab && !isNaN(era)) teamBullpenERA[ab]=era;
+    }
+  }catch(e){}
 }
 // Live game-time weather via Open-Meteo forecast (CORS-open, no key). One call
 // per home stadium; picks the hour nearest first pitch. Falls back to neutral.
@@ -736,11 +752,13 @@ async function fetchStarterKBB(pitcherIds){
     try{
       const pj=await mlbFetch(`/people?personIds=${ids.slice(i,i+100).join(',')}&hydrate=stats(group=[pitching],type=[season],season=${SEASON})`);
       for(const p of (pj.people||[])){
-        let k=null,bb=null,bf=null;
+        let k=null,bb=null,bf=null,ip=null,gs=null;
         for(const st of (p.stats||[])) for(const sp of (st.splits||[])){
           const s=sp.stat||{}; k=+s.strikeOuts; bb=+s.baseOnBalls; bf=+s.battersFaced;
+          ip=parseFloat(s.inningsPitched); gs=+s.gamesStarted;
         }
         if(bf>0){ const q=_kbbQuality((k-bb)/bf, bf); if(q!=null) starterKBB[p.id]=q; }
+        if(gs>=2 && ip>0){ starterOuts[p.id]=(ip*3)/gs; }   // avg outs per start
       }
     }catch(e){}
   }
@@ -1565,7 +1583,7 @@ function renderGame(game, extras){
   // Projected TOTAL uses the dedicated weather-aware model (backtest MAE 3.48,
   // ~61% O/U directional skill). The home/away SPLIT still comes from the win model.
   const _wx = gameWeather[game.gamePk] || null;
-  const wxTotal = totalModel(homeAbbr, awayAbbr, homeKBBq, awayKBBq, _wx);
+  const wxTotal = totalModel(homeAbbr, awayAbbr, homeKBBq, awayKBBq, _wx, game);
   const projTotal = wxTotal!=null ? wxTotal : (proj ? proj.home+proj.away : null);
   const ouLine = (odds && odds.overUnder) ? parseFloat(odds.overUnder) : null;
   let totalsLean = null; // {side:'OVER'|'UNDER', gap, strong}
@@ -2257,6 +2275,7 @@ async function init(){
     fetchSharpOdds().catch(()=>{}),
     fetchStarterKBB(mlbGames.flatMap(g=>[g.homeSpId,g.awaySpId])).catch(()=>{}),
     fetchWeather(mlbGames).catch(()=>{}),
+    fetchBullpen().catch(()=>{}),
   ]);
   stepDone('s4');
 
