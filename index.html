@@ -676,6 +676,57 @@ function projectScore(homeAbbr,awayAbbr,homeKBBq=null,awayKBBq=null,p=null){
   return { home:Math.max(0.5,s.home), away:Math.max(0.5,s.away) };
 }
 
+// ── WEATHER-AWARE TOTAL (dedicated model) ─────────────────────────────────
+//   Predicts the GAME TOTAL directly from team off/def rates, park, both
+//   starters' K-BB%, plus live temperature & wind. Backtested total MAE 3.48
+//   and ~61% directional O/U skill (vs league avg). Used for the projected
+//   total + O/U lean; the home/away split still comes from the win model.
+const TOTALS_MODEL = {
+  coef:[0.51618,0.14842,7.15671,-5.71701,0.03655,0.01987], // combOff,combDef,park,combKBB,tempF,windMph
+  intercept:-5.45052, shrinkK:50,
+};
+let gameWeather = {};   // "homeAbbr" or gamePk -> {t,w}; filled by fetchWeather()
+function totalModel(homeAbbr,awayAbbr,homeKBBq,awayKBBq,wx){
+  const h=teamStats[homeAbbr],a=teamStats[awayAbbr];
+  if(!h||!a) return null;
+  const hg=h.wins+h.losses, ag=a.wins+a.losses;
+  if(hg<1||ag<1) return null;
+  const lg=leagueRPG(), k=TOTALS_MODEL.shrinkK, lk=REAL_MODEL.kbbLg;
+  const hOff=(h.rs+lg*k)/(hg+k), hDef=(h.ra+lg*k)/(hg+k);
+  const aOff=(a.rs+lg*k)/(ag+k), aDef=(a.ra+lg*k)/(ag+k);
+  const combKBB=(homeKBBq!=null?homeKBBq:lk)+(awayKBBq!=null?awayKBBq:lk);
+  const temp=wx?wx.t:72, wind=wx?wx.w:5;
+  const f=[hOff+aOff, hDef+aDef, (PARK_FACTORS[homeAbbr]||1.0), combKBB, temp, wind];
+  const c=TOTALS_MODEL.coef;
+  let z=TOTALS_MODEL.intercept; for(let i=0;i<f.length;i++) z+=c[i]*f[i];
+  return Math.max(4.0, z);
+}
+// Live game-time weather via Open-Meteo forecast (CORS-open, no key). One call
+// per home stadium; picks the hour nearest first pitch. Falls back to neutral.
+const STADIUM_LL={ARI:[33.445,-112.067],ATL:[33.890,-84.468],BAL:[39.284,-76.622],BOS:[42.346,-71.097],
+ CHC:[41.948,-87.656],CWS:[41.830,-87.634],CIN:[39.097,-84.507],CLE:[41.496,-81.685],COL:[39.756,-104.994],
+ DET:[42.339,-83.049],HOU:[29.757,-95.356],KCR:[39.051,-94.480],LAA:[33.800,-117.883],LAD:[34.074,-118.240],
+ MIA:[25.778,-80.220],MIL:[43.028,-87.971],MIN:[44.982,-93.278],NYM:[40.757,-73.846],NYY:[40.829,-73.926],
+ OAK:[37.752,-122.200],PHI:[39.906,-75.166],PIT:[40.447,-80.006],SD:[32.708,-117.157],SEA:[47.591,-122.332],
+ SFG:[37.778,-122.389],STL:[38.623,-90.193],TB:[27.768,-82.653],TEX:[32.747,-97.082],TOR:[43.641,-79.389],WSH:[38.873,-77.007]};
+const FIXED_DOME=new Set(['TB']);   // retractables (HOU,TEX,MIL,ARI,SEA,TOR,MIA) keep outdoor reading
+async function fetchWeather(mlbGames){
+  await Promise.all(mlbGames.map(async g=>{
+    const ab=g.homeAbbr; if(gameWeather[g.gamePk]) return;
+    if(FIXED_DOME.has(ab)){ gameWeather[g.gamePk]={t:72,w:0}; return; }
+    const ll=STADIUM_LL[ab]; if(!ll) return;
+    try{
+      const u=`https://api.open-meteo.com/v1/forecast?latitude=${ll[0]}&longitude=${ll[1]}`+
+        `&hourly=temperature_2m,wind_speed_10m&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=UTC&forecast_days=2`;
+      const r=await fetch(u); if(!r.ok) return; const d=await r.json();
+      const hh=d.hourly, t=g.gameTime? new Date(g.gameTime):new Date();
+      const key=t.toISOString().slice(0,13)+':00';
+      let i=hh.time.indexOf(key); if(i<0) i=hh.time.findIndex(x=>x>=key); if(i<0) i=0;
+      gameWeather[g.gamePk]={t:Math.round(hh.temperature_2m[i]), w:Math.round(hh.wind_speed_10m[i])};
+    }catch(e){}
+  }));
+}
+
 // ── Live starter K-BB% qualities (one batched statsapi call) ─────────────
 let starterKBB = {};   // pitcher id -> regressed K-BB% quality
 let BEST_BETS = [];    // collected per-render: pregame model-value plays + strong totals leans
@@ -1511,9 +1562,11 @@ function renderGame(game, extras){
   // matches the model pick (run total from the score environment, split by the
   // model's win prob). Backtested run MAE ~2.44/team, 100% consistent.
   const proj = projectScore(homeAbbr, awayAbbr, homeKBBq, awayKBBq, modelHomeP);
-  // Totals lean: projected total vs Vegas O/U. Backtest shows directional skill
-  // mainly when the gap is large (≥1 run); the UNDER side is the stronger signal.
-  const projTotal = proj ? (proj.home + proj.away) : null;
+  // Projected TOTAL uses the dedicated weather-aware model (backtest MAE 3.48,
+  // ~61% O/U directional skill). The home/away SPLIT still comes from the win model.
+  const _wx = gameWeather[game.gamePk] || null;
+  const wxTotal = totalModel(homeAbbr, awayAbbr, homeKBBq, awayKBBq, _wx);
+  const projTotal = wxTotal!=null ? wxTotal : (proj ? proj.home+proj.away : null);
   const ouLine = (odds && odds.overUnder) ? parseFloat(odds.overUnder) : null;
   let totalsLean = null; // {side:'OVER'|'UNDER', gap, strong}
   if(projTotal!=null && ouLine!=null && !isNaN(ouLine)){
@@ -1522,11 +1575,12 @@ function renderGame(game, extras){
       totalsLean = { side: gap>0?'OVER':'UNDER', gap:Math.abs(gap), strong:Math.abs(gap)>=1.0 };
     }
   }
+  const wxNote = _wx ? ` · ${_wx.t}°F${_wx.w?(' '+_wx.w+'mph wind'):''}` : '';
   const leanHtml = totalsLean
-    ? ` <span class="ou-lean ${totalsLean.strong?'ou-strong':''}" title="Projected total ${projTotal.toFixed(1)} vs Vegas O/U ${ouLine}. Directional lean only — the UNDER signal backtests stronger than OVER.">${totalsLean.side==='OVER'?'▲':'▼'} ${totalsLean.side} lean (${projTotal.toFixed(1)} vs ${ouLine})</span>`
+    ? ` <span class="ou-lean ${totalsLean.strong?'ou-strong':''}" title="Weather-aware projected total ${projTotal.toFixed(1)} vs Vegas O/U ${ouLine}.${wxNote}. Directional lean (~61% backtest), not a guaranteed bet.">${totalsLean.side==='OVER'?'▲':'▼'} ${totalsLean.side} lean (${projTotal.toFixed(1)} vs ${ouLine})</span>`
     : '';
   const projHtml = proj
-    ? `<div class="proj-score" title="Expected runs, consistent with the win model (favored team always projects higher). Backtest MAE ≈2.4/team — not an exact final.">&#x1F52E; Projected: <b>${awayAbbr} ${proj.away.toFixed(1)} – ${proj.home.toFixed(1)} ${homeAbbr}</b> <span class="proj-tot">· total ${projTotal.toFixed(1)}</span>${leanHtml}</div>`
+    ? `<div class="proj-score" title="Score split from the win model (favored team always higher); total from the weather-aware totals model${wxNote}. Not exact finals.">&#x1F52E; Projected: <b>${awayAbbr} ${proj.away.toFixed(1)} – ${proj.home.toFixed(1)} ${homeAbbr}</b> <span class="proj-tot">· total ${projTotal.toFixed(1)}</span>${leanHtml}</div>`
     : '';
   const parkAdjActive    = modelResult.parkAdjActive;
   if(game.gamePk && modelResult.rawP!=null) nnLogPrediction(game.gamePk, modelResult.rawP, homeAbbr, awayAbbr);
@@ -2202,6 +2256,7 @@ async function init(){
     fetchKalshiMarkets().catch(()=>[]),
     fetchSharpOdds().catch(()=>{}),
     fetchStarterKBB(mlbGames.flatMap(g=>[g.homeSpId,g.awaySpId])).catch(()=>{}),
+    fetchWeather(mlbGames).catch(()=>{}),
   ]);
   stepDone('s4');
 
