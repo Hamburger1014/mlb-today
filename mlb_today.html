@@ -331,6 +331,37 @@
     /* ── No games ── */
     .no-games{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:40px;text-align:center;color:var(--dim)}
 
+    /* ── Hamburger + slide-out menu ── */
+    #hamburger{background:none;border:none;color:var(--text);font-size:1.4rem;cursor:pointer;padding:0 12px 0 2px;line-height:1}
+    #nav-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:40}
+    #nav-overlay.open{display:block}
+    #nav-menu{position:fixed;top:0;left:0;height:100%;width:240px;background:var(--card);border-right:1px solid var(--border);
+      z-index:41;transform:translateX(-100%);transition:transform .2s ease;padding:16px 0;box-shadow:2px 0 16px rgba(0,0,0,.4)}
+    #nav-menu.open{transform:translateX(0)}
+    .nav-head{font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:var(--dim2);padding:6px 20px 10px}
+    .nav-item{display:block;width:100%;text-align:left;background:none;border:none;color:var(--text);
+      font-size:.95rem;font-weight:600;padding:12px 20px;cursor:pointer}
+    .nav-item:hover{background:var(--card2)}
+    .nav-item.active{background:rgba(96,165,250,.15);color:#93c5fd;border-left:3px solid #60a5fa}
+    /* ── World Cup ── */
+    .wc-intro{font-size:.78rem;color:#cfe0f5;padding:10px 24px;line-height:1.5;
+      background:linear-gradient(90deg,#0a1424,#0d1521);border-bottom:1px solid var(--border);text-align:center}
+    .wc-card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px 16px}
+    .wc-top{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}
+    .wc-team{display:flex;align-items:center;gap:8px;font-weight:700;font-size:.95rem;flex:1}
+    .wc-team img{width:26px;height:26px;object-fit:contain}
+    .wc-team.away{justify-content:flex-end;text-align:right}
+    .wc-mid{font-size:.7rem;color:var(--dim2);text-align:center;min-width:84px}
+    .wc-score{font-size:1.3rem;font-weight:800}
+    .wc-bar{display:flex;height:24px;border-radius:7px;overflow:hidden;font-size:.7rem;font-weight:700}
+    .wc-bar .wseg{display:flex;align-items:center;justify-content:center;color:#04150b;min-width:0;white-space:nowrap}
+    .wc-w{background:linear-gradient(90deg,#16a34a,#22c55e)}
+    .wc-d{background:#5a6573;color:#e6edf5}
+    .wc-l{background:linear-gradient(90deg,#2563eb,#3b82f6);color:#eaf1ff}
+    .wc-pick{font-size:.74rem;color:var(--dim);margin-top:7px}
+    .wc-pick b{color:#86efac}
+    .wc-day{font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;color:var(--dim2);margin:6px 2px 2px}
+
     /* ── Footer ── */
     footer{text-align:center;padding:18px;font-size:.73rem;color:var(--dim2)}
 
@@ -362,18 +393,27 @@
 
 <header>
   <div class="hdr-left">
-    <div class="hdr-logo">⚾</div>
+    <button id="hamburger" aria-label="Menu" onclick="toggleMenu()">☰</button>
+    <div class="hdr-logo" id="hdr-logo">⚾</div>
     <div>
-      <div class="hdr-title">MLB Today</div>
+      <div class="hdr-title" id="hdr-title">MLB Today</div>
       <div class="hdr-date" id="hdr-date">Loading…</div>
     </div>
   </div>
   <div class="hdr-right">
     <div class="hdr-badge badge-espn">📊 ESPN Odds</div>
     <div class="hdr-badge badge-kalshi" id="kalshi-badge" title="Click to show Kalshi API debug info" style="cursor:pointer" onclick="showKalshiDebug()">📊 2 Books</div>
-    <button class="refresh-btn" onclick="init()">↻ Refresh</button>
+    <button class="refresh-btn" onclick="refreshActiveView()">↻ Refresh</button>
   </div>
 </header>
+
+<!-- Slide-out navigation -->
+<div id="nav-overlay" onclick="toggleMenu()"></div>
+<nav id="nav-menu">
+  <div class="nav-head">Sections</div>
+  <button class="nav-item active" data-view="mlb" onclick="switchView('mlb')">⚾ MLB Today</button>
+  <button class="nav-item" data-view="wc" onclick="switchView('wc')">⚽ World Cup 2026</button>
+</nav>
 
 <div class="legend">
   <div class="legend-item"><div class="dot" style="background:#3a8ae8"></div>Our Model (Pythagorean)</div>
@@ -384,6 +424,7 @@
   <span style="margin-left:auto;font-size:.7rem;color:var(--dim2)">Click any game to expand · Edge = Consensus − Kalshi</span>
 </div>
 
+<div id="mlb-view">
 <div id="yday-record" style="display:none;font-size:.8rem;line-height:1.7;color:#cfe3d4;padding:8px 24px;background:linear-gradient(90deg,#0a1f14,#0d1521);border-bottom:1px solid var(--border);text-align:center"></div>
 <div id="nn-stats-bar" style="font-size:.73rem;color:var(--dim);padding:5px 24px;background:#070f1c;border-bottom:1px solid var(--border);text-align:center;cursor:pointer" title="Click to show/hide the live track record">&#x1F9E0; Real-Data Model · Loading…</div>
 <div id="track-record" style="display:none"></div>
@@ -399,6 +440,16 @@
   </div>
   <div id="games-container" style="display:none;flex-direction:column;gap:12px"></div>
 </main>
+</div>
+
+<!-- ── WORLD CUP VIEW ── -->
+<div id="wc-view" style="display:none">
+  <div class="wc-intro">⚽ <b>World Cup 2026</b> · Win/Draw/Loss from an Elo model (eloratings.net) — a respected method, but <b>not backtested</b> like the MLB model. Treat as estimates.</div>
+  <main>
+    <div id="wc-status" style="text-align:center;padding:30px;color:var(--dim)">Loading World Cup matches…</div>
+    <div id="wc-container" style="display:none;flex-direction:column;gap:12px"></div>
+  </main>
+</div>
 
 <footer>MLB Today · MLB Stats API + ESPN · Kalshi Markets · Consensus blends model (20–25%) + Vegas (50%) + ESPN (30%) · Model: logistic regression trained on 7,300 real MLB games 2022–24 (56.6% walk-forward; 60–66% on confident picks) + Platt auto-calibration · Features: Pythagorean, win%, run-diff, starting-pitcher ERA, home edge · ROI engine: 9-book devigged fair value vs Kalshi price, fee-aware EV + ¼-Kelly stake</footer>
 
@@ -423,6 +474,111 @@ const ESPN_SITE   = 'https://site.api.espn.com/apis/site/v2/sports/baseball/mlb'
 const ESPN_CORE   = 'https://sports.core.api.espn.com/v2/sports/baseball/leagues/mlb';
 const SEASON      = new Date().getFullYear();
 const MLB_LOGO    = id => `https://www.mlbstatic.com/team-logos/${id}.svg`;
+
+// ═══════════════════════════════════════════════════════════════
+//  NAVIGATION (hamburger menu + view switching)
+// ═══════════════════════════════════════════════════════════════
+let ACTIVE_VIEW='mlb', wcLoaded=false;
+function toggleMenu(){
+  document.getElementById('nav-menu').classList.toggle('open');
+  document.getElementById('nav-overlay').classList.toggle('open');
+}
+function switchView(v){
+  ACTIVE_VIEW=v;
+  document.getElementById('mlb-view').style.display = v==='mlb'?'':'none';
+  document.getElementById('wc-view').style.display  = v==='wc'?'':'none';
+  document.getElementById('hdr-logo').textContent   = v==='wc'?'⚽':'⚾';
+  document.getElementById('hdr-title').textContent  = v==='wc'?'World Cup 2026':'MLB Today';
+  document.querySelectorAll('.nav-item').forEach(b=>b.classList.toggle('active',b.dataset.view===v));
+  toggleMenu();
+  if(v==='wc' && !wcLoaded){ wcLoaded=true; loadWorldCup(); }
+}
+function refreshActiveView(){ ACTIVE_VIEW==='wc' ? loadWorldCup() : init(); }
+
+// ═══════════════════════════════════════════════════════════════
+//  WORLD CUP — Elo win/draw/loss model (eloratings.net snapshot).
+//  Respected method, but NOT backtested like the MLB model → estimates.
+// ═══════════════════════════════════════════════════════════════
+const WC_ESPN='https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world';
+const ELO={"Spain":2157,"Argentina":2115,"France":2063,"England":2024,"Brazil":1991,"Portugal":1989,"Colombia":1982,"Netherlands":1948,"Ecuador":1938,"Germany":1932,"Norway":1914,"Croatia":1912,"Turkey":1911,"Japan":1906,"Belgium":1894,"Uruguay":1892,"Switzerland":1891,"Mexico":1875,"Denmark":1869,"Italy":1869,"Senegal":1860,"Paraguay":1834,"Austria":1830,"Morocco":1827,"Canada":1788,"Scotland":1782,"Ukraine":1780,"Australia":1777,"Algeria":1772,"Iran":1772,"Russia":1772,"Nigeria":1767,"South Korea":1758,"Greece":1744,"Czechia":1740,"Serbia":1734,"Venezuela":1733,"Panama":1730,"United States":1726,"Chile":1717,"Kosovo":1715,"Uzbekistan":1714,"Sweden":1712,"Hungary":1710,"Poland":1710,"Peru":1700,"Ireland":1699,"Egypt":1696,"Ivory Coast":1695,"Wales":1682,"Slovenia":1682,"Jordan":1680,"Slovakia":1667,"Georgia":1654,"DR Congo":1652,"Israel":1647,"Romania":1639,"Tunisia":1628,"Bolivia":1621,"Albania":1616,"Cameroon":1614,"Costa Rica":1608,"Iraq":1607,"Northern Ireland":1605,"Bosnia and Herzegovina":1595,"North Macedonia":1589,"Mali":1588,"Cape Verde":1578,"Saudi Arabia":1576,"Honduras":1570,"Iceland":1568,"New Zealand":1562,"Haiti":1548,"Angola":1542,"United Arab Emirates":1540,"Finland":1536,"Burkina Faso":1529,"Jamaica":1527,"Belarus":1522,"South Africa":1517,"Ghana":1510,"Guatemala":1504,"Oman":1480,"Syria":1479,"Palestine":1465,"Guinea":1463,"Montenegro":1461,"Bulgaria":1458,"Luxembourg":1450,"Northern Cyprus":1442,"Curaçao":1434,"Suriname":1431,"Kazakhstan":1428,"China":1424,"Kurdistan":1424,"Qatar":1421,"Libya":1420,"Gambia":1419,"Bahrain":1414,"Benin":1405,"Gabon":1401,"Uganda":1394,"Trinidad and Tobago":1386,"Faroe Islands":1386,"Niger":1382,"Madagascar":1380,"Equatorial Guinea":1380,"Togo":1379,"Thailand":1376,"North Korea":1375,"Comoros":1374,"Armenia":1373,"Zimbabwe":1372,"Indonesia":1372,"Zambia":1371,"Kenya":1363,"Estonia":1360,"Vietnam":1351,"Sudan":1350,"Reunion":1345,"El Salvador":1342,"Mozambique":1342,"Sierra Leone":1341,"Guadeloupe":1338,"Rwanda":1336,"Nicaragua":1333,"Kuwait":1332,"Mauritania":1329,"Azerbaijan":1322,"Zanzibar":1320,"Cyprus":1314,"Tanzania":1313,"Martinique":1312,"Liberia":1304,"Namibia":1303,"Kyrgyzstan":1295,"Malaysia":1293,"Guyana":1292,"Lebanon":1288,"Latvia":1288,"Ethiopia":1287,"New Caledonia":1286,"Tajikistan":1285,"Burundi":1285,"Dominican Republic":1283,"Lithuania":1279,"Moldova":1270,"Botswana":1267,"Malta":1255,"Guinea-Bissau":1248,"Cuba":1239,"Malawi":1239,"Central African Republic":1236,"French Guiana":1223,"Mayotte":1216,"Turkmenistan":1209,"Congo":1207,"Eritrea":1201,"Lesotho":1198,"Yemen":1195,"Philippines":1179,"Tahiti":1177,"Eswatini":1148,"Saint Vincent and the Grenadines":1141,"Papua New Guinea":1135,"Puerto Rico":1135,"Singapore":1134,"India":1128,"Vanuatu":1118,"Bermuda":1117,"South Sudan":1109,"Fiji":1104,"Hong Kong":1101,"Grenada":1098,"Andorra":1080,"Mauritius":1073,"Chad":1073,"Belize":1073,"Solomon Islands":1054,"Saint Martin":1042,"Sao Tome and Principe":1035,"Saint Kitts and Nevis":1029,"Gibraltar":1011,"Somaliland":1005,"Saint Lucia":1003,"Myanmar":1675,"Somalia":1218,"Aruba":1444,"Montserrat":1022,"Afghanistan":1166,"Greenland":1035,"Bangladesh":1115,"Dominica":1330,"Pakistan":1458,"Barbados":1406,"Antigua and Barbuda":1319,"Liechtenstein":1242,"Nepal":1008,"Cambodia":1391,"Seychelles":1123,"Sri Lanka":1045,"San Marino":1015,"Taiwan":1767,"Bonaire":1130,"Maldives":1174,"Cayman Islands":1140,"Laos":1017,"Macao":1098};
+// Maps ESPN's name variants -> the key used in ELO above
+const ELO_ALIAS={'Bosnia-Herzegovina':'Bosnia and Herzegovina','Congo DR':'DR Congo',
+  'Korea Republic':'South Korea','Korea DPR':'North Korea','Czech Republic':'Czechia',
+  'IR Iran':'Iran','USA':'United States','Côte d\'Ivoire':'Ivory Coast','Cabo Verde':'Cape Verde',
+  'Türkiye':'Turkey','China PR':'China','Republic of Ireland':'Ireland','Curacao':'Curaçao'};
+function eloFor(name){
+  if(name==null) return null;
+  if(ELO[name]!=null) return ELO[name];
+  const a=ELO_ALIAS[name]; if(a && ELO[a]!=null) return ELO[a];
+  return null;
+}
+// Elo → P(win)/P(draw)/P(loss) for `a` vs `b`. hfa: home-field Elo bump (host only).
+function wcProbs(ra,rb,hfa=0){
+  const ea=1/(1+Math.pow(10,(rb-(ra+hfa))/400));
+  const gap=Math.abs((ra+hfa)-rb);
+  const pd=0.29*Math.exp(-gap/350);
+  let pa=ea-pd/2, pb=1-ea-pd/2;
+  pa=Math.max(0.01,pa); pb=Math.max(0.01,pb);
+  const s=pa+pb+pd; return {w:pa/s,d:pd/s,l:pb/s};
+}
+const WC_HOSTS=new Set(['United States','Mexico','Canada']);
+async function loadWorldCup(){
+  const status=document.getElementById('wc-status'), cont=document.getElementById('wc-container');
+  status.style.display=''; status.textContent='Loading World Cup matches…'; cont.style.display='none'; cont.innerHTML='';
+  try{
+    // pull a window of dates around today so we get upcoming + in-progress
+    const days=[]; const now=new Date();
+    for(let off=-1; off<=6; off++){ const d=new Date(now); d.setDate(d.getDate()+off);
+      days.push(`${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`); }
+    const seen=new Set(), events=[];
+    const results=await Promise.all(days.map(dt=>
+      fetch(`${WC_ESPN}/scoreboard?dates=${dt}`).then(r=>r.ok?r.json():null).catch(()=>null)));
+    for(const d of results){ for(const e of (d&&d.events||[])){ if(!seen.has(e.id)){ seen.add(e.id); events.push(e); } } }
+    events.sort((a,b)=> new Date(a.date)-new Date(b.date));
+    if(!events.length){ status.textContent='No World Cup matches in the next several days.'; return; }
+    let html='', lastDay='';
+    for(const e of events){
+      const c=e.competitions[0]; const comps=c.competitors;
+      const home=comps.find(t=>t.homeAway==='home')||comps[0];
+      const away=comps.find(t=>t.homeAway==='away')||comps[1];
+      const hn=home.team.displayName, an=away.team.displayName;
+      const hr=eloFor(hn), ar=eloFor(an);
+      const st=c.status.type; const live=st.state==='in', done=st.state==='post';
+      const dayLabel=new Date(e.date).toLocaleDateString([],{weekday:'short',month:'short',day:'numeric'});
+      if(dayLabel!==lastDay){ html+=`<div class="wc-day">${dayLabel}</div>`; lastDay=dayLabel; }
+      const hImg=home.team.logo||'', aImg=away.team.logo||'';
+      const hScore=home.score!=null?home.score:'', aScore=away.score!=null?away.score:'';
+      const mid = (live||done)
+        ? `<div class="wc-mid"><div class="wc-score">${aScore} – ${hScore}</div><div>${done?'FT':st.shortDetail||'LIVE'}</div></div>`
+        : `<div class="wc-mid">${new Date(e.date).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}<br>${st.shortDetail||''}</div>`;
+      let pred='';
+      if(hr!=null && ar!=null){
+        // host gets a small home bump
+        const hfa = WC_HOSTS.has(hn)?60:(WC_HOSTS.has(an)?-60:0);
+        const p=wcProbs(hr,ar,hfa);
+        const W=Math.round(p.w*100), D=Math.round(p.d*100), L=Math.round(p.l*100);
+        const best = p.w>=p.d&&p.w>=p.l ? hn+' win' : (p.l>=p.d ? an+' win' : 'Draw');
+        pred=`<div class="wc-bar">
+            <div class="wseg wc-w" style="width:${W}%" title="${an} win ${L}%">${W>11?W+'%':''}</div>
+            <div class="wseg wc-d" style="width:${D}%" title="Draw ${D}%">${D>11?'D '+D+'%':''}</div>
+            <div class="wseg wc-l" style="width:${L}%" title="${hn} win? ">${L>11?L+'%':''}</div>
+          </div>
+          <div class="wc-pick">Model lean: <b>${best}</b> · ${an} ${W}% / Draw ${D}% / ${hn} ${L}% <span style="color:var(--dim2)">(Elo ${ar} vs ${hr})</span></div>`;
+      } else {
+        pred=`<div class="wc-pick" style="color:var(--dim2)">No Elo rating for ${hr==null?hn:an} — prediction unavailable</div>`;
+      }
+      html+=`<div class="wc-card">
+        <div class="wc-top">
+          <div class="wc-team">${aImg?`<img src="${aImg}" alt="">`:''}<span>${an}</span></div>
+          ${mid}
+          <div class="wc-team away"><span>${hn}</span>${hImg?`<img src="${hImg}" alt="">`:''}</div>
+        </div>
+        ${pred}
+      </div>`;
+    }
+    cont.innerHTML=html; status.style.display='none'; cont.style.display='flex';
+  }catch(err){ status.textContent='Could not load World Cup data: '+err.message; }
+}
 
 // ═══════════════════════════════════════════════════════════════
 //  TEAM ABBREVIATION NORMALIZATION
