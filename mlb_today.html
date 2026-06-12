@@ -1249,9 +1249,18 @@ function computeConsensus(modelP, vegasP, espnP, opts={}){
 //  ESPN FETCHING
 // ═══════════════════════════════════════════════════════════════
 async function espnFetch(url){
-  const r = await fetch(url, {headers:{'Accept':'application/json'}});
-  if(!r.ok) throw new Error(`ESPN ${r.status}`);
-  return r.json();
+  // Retry transient failures: ESPN throttles bursts (we fire ~15 summary calls
+  // at once on load), and a single dropped call used to null a game's odds +
+  // predictor permanently. 3 attempts with short backoff.
+  let lastErr;
+  for(let i=0;i<3;i++){
+    try{
+      const r = await fetch(url, {headers:{'Accept':'application/json'}});
+      if(!r.ok) throw new Error(`ESPN ${r.status}`);
+      return await r.json();
+    }catch(e){ lastErr=e; if(i<2) await new Promise(res=>setTimeout(res, 400*(i+1))); }
+  }
+  throw lastErr;
 }
 
 // ESPN scoreboard → game list with event IDs and probable pitchers
@@ -1354,8 +1363,9 @@ async function fetchGameSummary(espnId){
     const data = await espnFetch(`${ESPN_SITE}/summary?event=${espnId}`);
 
     // ── ODDS from pickcenter — grab top 2 books ───────────────────
-    const PREFERRED = ['41','37','38','58','68']; // DK, FD, Caesars, BetMGM, ESPN BET
-    const NAMES = {'41':'DraftKings','37':'FanDuel','38':'Caesars','58':'BetMGM','68':'ESPN BET'};
+    // Prefer sharp books BY NAME (ESPN renumbers provider IDs — e.g. DraftKings
+    // moved to id "100" — so matching on id silently breaks; name is stable).
+    const NAME_RANK = ['draftkings','fanduel','caesars','betmgm','espn bet','bet365','pointsbet','barstool'];
     const providers = data.pickcenter || data.odds || [];
 
     function extractOdds(item){
@@ -1365,30 +1375,17 @@ async function fetchGameSummary(espnId){
       if(!hRaw || !aRaw) return null;
       const {home,away} = devig(hRaw, aRaw);
       return {homeP:home, awayP:away, homeML:hML, awayML:aML,
-        provider: item.provider?.name || NAMES[String(item.provider?.id||'')] || 'Vegas',
+        provider: item.provider?.name || 'Vegas',
         overUnder: item.overUnder || item.total || null};
     }
 
-    let odds = null, odds2 = null;
-    for(const pid of PREFERRED){
-      const item = providers.find(i=>String(i.provider?.id||'')=== pid);
-      if(!item) continue;
-      const o = extractOdds(item);
-      if(!o) continue;
-      if(!odds){ odds = o; }
-      else if(!odds2){ odds2 = o; break; }
-    }
-    // Fallback: sweep remaining providers
-    if(!odds || !odds2){
-      for(const item of providers){
-        const pid = String(item.provider?.id||'');
-        if(PREFERRED.includes(pid)) continue; // already handled
-        const o = extractOdds(item);
-        if(!o) continue;
-        if(!odds){ odds = o; }
-        else if(!odds2){ odds2 = o; break; }
-      }
-    }
+    // Rank every provider that has a usable moneyline, sharp books first.
+    const ranked = providers
+      .map(item => ({o: extractOdds(item), rank: NAME_RANK.indexOf((item.provider?.name||'').toLowerCase())}))
+      .filter(x => x.o)
+      .sort((a,b) => (a.rank<0?99:a.rank) - (b.rank<0?99:b.rank));
+    const odds  = ranked[0]?.o || null;
+    const odds2 = ranked[1]?.o || null;
 
     // ── ESPN PREDICTOR ────────────────────────────────────────────
     let predictor = null;
@@ -2591,13 +2588,16 @@ async function init(){
   stepDone('s3'); stepActive('s4');
 
   // ── Step 4: Injuries + Kalshi + sharp sportsbook odds (all non-fatal) ────────
+  // Time-bound each: a slow/down endpoint (esp. the Kalshi worker proxy) must
+  // never hang the whole render — the page shows whatever sources came back.
+  const cap = (p, ms, fb) => Promise.race([p.catch(()=>fb), new Promise(r=>setTimeout(()=>r(fb), ms))]);
   const [injuries, kalshiEvents] = await Promise.all([
-    fetchInjuries().catch(()=>({})),
-    fetchKalshiMarkets().catch(()=>[]),
-    fetchSharpOdds().catch(()=>{}),
-    fetchStarterKBB(mlbGames.flatMap(g=>[g.homeSpId,g.awaySpId])).catch(()=>{}),
-    fetchWeather(mlbGames).catch(()=>{}),
-    fetchBullpen().catch(()=>{}),
+    cap(fetchInjuries(), 10000, {}),
+    cap(fetchKalshiMarkets(), 12000, []),
+    cap(fetchSharpOdds(), 10000, undefined),
+    cap(fetchStarterKBB(mlbGames.flatMap(g=>[g.homeSpId,g.awaySpId])), 10000, undefined),
+    cap(fetchWeather(mlbGames), 10000, undefined),
+    cap(fetchBullpen(), 10000, undefined),
   ]);
   stepDone('s4');
 
