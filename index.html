@@ -581,20 +581,48 @@ async function fetchWCKalshi(){
   const byEv={};
   for(const m of all){ if(m.event_ticker) (byEv[m.event_ticker]=byEv[m.event_ticker]||[]).push(m); }
   for(const et in byEv){
-    const arr=byEv[et]; let draw=null; const teams={};
+    const arr=byEv[et]; let draw=null, drawAsk=null; const teams={}, teamsAsk={};
     for(const m of arr){
       const sub=(m.yes_sub_title||'').trim(); const mid=midYes(m);
       if(mid==null) continue;
-      if(/^tie$/i.test(sub)) draw=mid; else teams[wcCanon(sub)]=mid;
+      const ask=parseFloat(m.yes_ask_dollars); const askV=(!isNaN(ask)&&ask>0)?ask:null;
+      if(/^tie$/i.test(sub)){ draw=mid; drawAsk=askV; } else { teams[wcCanon(sub)]=mid; teamsAsk[wcCanon(sub)]=askV; }
     }
     const names=Object.keys(teams);
     if(draw==null||names.length<2) continue;
     const t=draw+teams[names[0]]+teams[names[1]]; if(t<=0) continue;
-    const rec={draw:draw/t, byTeam:{}, event:et};
+    const rec={draw:draw/t, byTeam:{}, byTeamAsk:teamsAsk, drawAsk, event:et};
     rec.byTeam[names[0]]=teams[names[0]]/t; rec.byTeam[names[1]]=teams[names[1]]/t;
     map.set([names[0],names[1]].sort().join('|'), rec);
   }
   return map;
+}
+// World Cup value play: best +EV outcome for one match vs the Kalshi ASK price,
+// fee-aware (same engine + constants as MLB evaluateBet). Because the Elo model
+// is NOT backtested, we ONLY flag a play the DraftKings sharp line ALSO rates as
+// underpriced on Kalshi (booksAgree) — that makes the edge a real cross-market
+// discrepancy, not Elo speculation. cons/vegas = {wa,d,wh}; kal carries asks.
+function wcEvaluate(cons, vegas, kal, hAbbr, aAbbr){
+  if(!cons || !kal) return null;
+  const sides=[
+    {key:'home', label:`${hAbbr} win`, fair:cons.wh, dk:vegas?vegas.wh:null, price:kal.askWh},
+    {key:'away', label:`${aAbbr} win`, fair:cons.wa, dk:vegas?vegas.wa:null, price:kal.askWa},
+    {key:'draw', label:'Draw',         fair:cons.d,  dk:vegas?vegas.d:null,  price:kal.askD},
+  ];
+  let best=null;
+  for(const s of sides){
+    if(s.price==null||isNaN(s.price)||s.price<=0.02||s.price>=0.98) continue;
+    const fee=KALSHI_FEE*s.price*(1-s.price);
+    const netEV=s.fair - s.price - fee;
+    const roi=netEV/s.price;
+    const booksAgree = s.dk!=null ? (s.dk >= s.price) : false; // require sharp confirmation
+    if(netEV>=MIN_NET_EV && roi>=MIN_ROI && booksAgree){
+      const kelly=Math.max(0,(s.fair-s.price)/(1-s.price));
+      const stakeFrac=Math.min(0.05, KELLY_FRACTION*kelly);
+      if(!best||netEV>best.netEV) best={...s, fee, netEV, roi, stakeFrac};
+    }
+  }
+  return best;
 }
 async function loadWorldCup(){
   const status=document.getElementById('wc-status'), cont=document.getElementById('wc-container');
@@ -617,7 +645,7 @@ async function loadWorldCup(){
     // then re-paint with Kalshi prices when that background fetch resolves — a
     // slow/flaky Kalshi proxy can never hang or block the view.
     const paint = (kMap) => {
-      let html='', lastDay='';
+      let html='', lastDay=''; const wcBets=[];
     for(const e of events){
       const c=e.competitions[0]; const comps=c.competitors;
       const home=comps.find(t=>t.homeAway==='home')||comps[0];
@@ -650,7 +678,8 @@ async function loadWorldCup(){
         const ch=wcCanon(hn), ca=wcCanon(an);
         const krec=kMap.get([ch,ca].sort().join('|'));
         if(krec && krec.byTeam[ch]!=null && krec.byTeam[ca]!=null)
-          kal={wa:krec.byTeam[ca], d:krec.draw, wh:krec.byTeam[ch], event:krec.event};
+          kal={wa:krec.byTeam[ca], d:krec.draw, wh:krec.byTeam[ch], event:krec.event,
+               askWa:krec.byTeamAsk?krec.byTeamAsk[ca]:null, askD:krec.drawAsk, askWh:krec.byTeamAsk?krec.byTeamAsk[ch]:null};
         // weighted blend — markets lead (Vegas 50 / Kalshi 25), Elo model 25
         const parts=[{w:0.25,v:elo}];
         if(vegas) parts.push({w:0.50,v:vegas});
@@ -659,6 +688,9 @@ async function loadWorldCup(){
         const cons={wa:parts.reduce((s,p)=>s+p.v.wa*p.w,0)/tw,
                     d :parts.reduce((s,p)=>s+p.v.d *p.w,0)/tw,
                     wh:parts.reduce((s,p)=>s+p.v.wh*p.w,0)/tw};
+        // collect best-bets: only pregame, only where Kalshi price is +EV AND the
+        // sharp DraftKings line agrees (handled inside wcEvaluate)
+        if(!done && !live){ const vb=wcEvaluate(cons,vegas,kal,hAbbr,aAbbr); if(vb) wcBets.push({matchup:`${aAbbr} v ${hAbbr}`, ...vb}); }
         const srcN=parts.length;
         const Wa=Math.round(cons.wa*100), D=Math.round(cons.d*100), Wh=Math.round(cons.wh*100);
         const homeFav=cons.wh>cons.wa;
@@ -739,7 +771,18 @@ async function loadWorldCup(){
         ${predBlock}
       </div>`;
     }
-      cont.innerHTML=html; status.style.display='none'; cont.style.display='flex';
+      // ── World Cup "Best Bets" card (mirrors the MLB one) ──
+      const bbHtml = (()=>{
+        const plays=wcBets.slice().sort((a,b)=>b.roi-a.roi);
+        if(!kMap.size) return `<div class="best-bets"><div class="bb-title">&#x1F3AF; World Cup Best Bets</div><div class="bb-empty">Comparing the consensus to live Kalshi prices…</div></div>`;
+        if(!plays.length) return `<div class="best-bets"><div class="bb-title">&#x1F3AF; World Cup Best Bets</div><div class="bb-empty">No World Cup edges vs Kalshi right now — the consensus agrees with the market. Sit tight.</div></div>`;
+        let rows='';
+        for(const b of plays.slice(0,6)){
+          rows+=`<div class="bb-row"><span class="bb-mu">${b.matchup}</span><span class="bb-pick">${b.label}</span><span class="bb-edge">+${(b.roi*100).toFixed(0)}% ROI</span><span class="bb-stake">${(b.stakeFrac*100).toFixed(1)}% bankroll</span> <span class="bb-ok">&#x2713; books</span></div>`;
+        }
+        return `<div class="best-bets"><div class="bb-title">&#x1F3AF; World Cup Best Bets <span class="bb-count">${plays.length}</span></div>${rows}<div class="bb-foot">Value = blended consensus beats the Kalshi ask after fees, and the DraftKings sharp line agrees it's underpriced. The Elo model is NOT backtested — treat as estimates, not a tracked record. Not financial advice.</div></div>`;
+      })();
+      cont.innerHTML=bbHtml+html; status.style.display='none'; cont.style.display='flex';
     };
     paint(new Map());                                    // phase 1 — instant (Elo + Vegas)
     kalshiPromise.then(km=>{ if(km && km.size && ACTIVE_VIEW==='wc') paint(km); }).catch(()=>{}); // phase 2 — enrich with Kalshi
