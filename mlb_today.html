@@ -567,17 +567,17 @@ async function fetchWCKalshi(){
     const lp=parseFloat(m.last_price_dollars); return isNaN(lp)?null:lp;
   };
   const now=Math.floor(Date.now()/1000);
-  const deadline=Date.now()+45000;   // never loop more than ~45s, even on a crawling proxy
-  let cursor='', pages=0; const all=[];
-  do{
-    let d=null;
-    for(let i=0;i<3 && !d && Date.now()<deadline;i++){
-      try{ d=await kalshiPublicFetch(`/markets?series_ticker=KXWCGAME&status=open&min_close_ts=${now}&limit=100`+(cursor?'&cursor='+encodeURIComponent(cursor):'')); }
-      catch(e){ d=null; }
-    }
-    if(!d) break;
-    all.push(...(d.markets||[])); cursor=d.cursor||''; pages++;
-  } while(cursor && pages<6 && Date.now()<deadline);
+  const all=[];
+  // ONE high-limit call (Kalshi caps limit at 1000). KXWCGAME has ~210 open
+  // match markets, so a single request gets the whole tournament in ~0.5s.
+  // Paginating (6 calls + retries) multiplied rate-limit pressure on the proxy
+  // and timed out → Kalshi showed "Not available"; one call is fast + reliable.
+  let d=null;
+  for(let i=0;i<3 && !d;i++){
+    try{ d=await kalshiPublicFetch(`/markets?series_ticker=KXWCGAME&status=open&min_close_ts=${now}&limit=1000`); }
+    catch(e){ d=null; if(i<2) await new Promise(r=>setTimeout(r,600*(i+1))); }
+  }
+  if(d) all.push(...(d.markets||[]));
   const byEv={};
   for(const m of all){ if(m.event_ticker) (byEv[m.event_ticker]=byEv[m.event_ticker]||[]).push(m); }
   for(const et in byEv){
