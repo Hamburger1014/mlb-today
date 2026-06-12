@@ -444,7 +444,7 @@
 
 <!-- ── WORLD CUP VIEW ── -->
 <div id="wc-view" style="display:none">
-  <div class="wc-intro">⚽ <b>World Cup 2026</b> · Win/Draw/Loss from an Elo model (eloratings.net) — a respected method, but <b>not backtested</b> like the MLB model. Treat as estimates.</div>
+  <div class="wc-intro">⚽ <b>World Cup 2026</b> · Consensus blends an <b>Elo model</b> (eloratings.net) with the <b>DraftKings line</b> (carried by ESPN) and <b>Kalshi</b> market prices. ESPN has no soccer model of its own, so its odds <i>are</i> the DraftKings line. The Elo model is <b>not backtested</b> like the MLB model — treat as estimates.</div>
   <main>
     <div id="wc-status" style="text-align:center;padding:30px;color:var(--dim)">Loading World Cup matches…</div>
     <div id="wc-container" style="display:none;flex-direction:column;gap:12px"></div>
@@ -522,6 +522,80 @@ function wcProbs(ra,rb,hfa=0){
   const s=pa+pb+pd; return {w:pa/s,d:pd/s,l:pb/s};
 }
 const WC_HOSTS=new Set(['United States','Mexico','Canada']);
+
+// ═══════════════════════════════════════════════════════════════
+//  WORLD CUP — multi-source odds (Vegas + Kalshi), blended like MLB
+//  • Vegas  = DraftKings 3-way moneyline, surfaced by ESPN's feed.
+//             ESPN has NO soccer win-probability model of its own, so the
+//             odds it carries ARE the DraftKings line (one feed, not two).
+//  • Kalshi = KXWCGAME match markets (yes price per outcome, de-vigged).
+// ═══════════════════════════════════════════════════════════════
+// Canonical country name for cross-source matching (ESPN ↔ Kalshi).
+function wcCanon(s){
+  if(!s) return '';
+  // NFD splits accents into combining marks; remove those (→''), THEN turn any
+  // other non-letters into spaces. (Removing first keeps "Türkiye"→"turkiye",
+  // not "tu rkiye" — a space would break the match.)
+  const x=s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z ]/g,' ').replace(/\s+/g,' ').trim();
+  const syn={'korea republic':'south korea','republic of korea':'south korea','korea dpr':'north korea',
+    'congo dr':'dr congo','congo democratic republic':'dr congo','czech republic':'czechia',
+    'ir iran':'iran','usa':'united states','united states of america':'united states',
+    'cote d ivoire':'ivory coast','cote divoire':'ivory coast','turkiye':'turkey','china pr':'china','cabo verde':'cape verde',
+    'bosnia herzegovina':'bosnia and herzegovina'};
+  return syn[x]||x;
+}
+// 3-way de-vig of the DraftKings moneyline carried in an ESPN competition.
+function wcVegas(c){
+  const list=(c&&c.odds)||[];
+  const o=list.find(x=>x&&x.moneyline&&x.moneyline.home&&x.moneyline.home.close
+    &&x.moneyline.away&&x.moneyline.away.close&&x.moneyline.draw&&x.moneyline.draw.close);
+  if(!o) return null;
+  const hO=o.moneyline.home.close.odds, aO=o.moneyline.away.close.odds, dO=o.moneyline.draw.close.odds;
+  const rh=mlToRawProb(hO), ra=mlToRawProb(aO), rd=mlToRawProb(dO);
+  if(rh==null||ra==null||rd==null) return null;
+  const t=rh+ra+rd; if(t<=0) return null;
+  return {wh:rh/t, d:rd/t, wa:ra/t, homeML:parseFloat(hO), awayML:parseFloat(aO), drawML:parseFloat(dO),
+    provider:(o.provider&&o.provider.displayName)||'DraftKings', overUnder:(o.overUnder!=null?o.overUnder:null)};
+}
+// Pull Kalshi KXWCGAME markets → Map(sortedPairKey → {byTeam:{canon:winP}, draw, event}).
+// Never throws; degrades to an empty Map so the card still shows Elo + Vegas.
+async function fetchWCKalshi(){
+  const map=new Map();
+  const midYes=(m)=>{
+    const b=parseFloat(m.yes_bid_dollars), a=parseFloat(m.yes_ask_dollars);
+    if(!isNaN(a)&&!isNaN(b)&&(a>0||b>0)) return (a>0&&b>0)?(a+b)/2:(a>0?a:b);
+    const lp=parseFloat(m.last_price_dollars); return isNaN(lp)?null:lp;
+  };
+  const now=Math.floor(Date.now()/1000);
+  const deadline=Date.now()+45000;   // never loop more than ~45s, even on a crawling proxy
+  let cursor='', pages=0; const all=[];
+  do{
+    let d=null;
+    for(let i=0;i<3 && !d && Date.now()<deadline;i++){
+      try{ d=await kalshiPublicFetch(`/markets?series_ticker=KXWCGAME&status=open&min_close_ts=${now}&limit=100`+(cursor?'&cursor='+encodeURIComponent(cursor):'')); }
+      catch(e){ d=null; }
+    }
+    if(!d) break;
+    all.push(...(d.markets||[])); cursor=d.cursor||''; pages++;
+  } while(cursor && pages<6 && Date.now()<deadline);
+  const byEv={};
+  for(const m of all){ if(m.event_ticker) (byEv[m.event_ticker]=byEv[m.event_ticker]||[]).push(m); }
+  for(const et in byEv){
+    const arr=byEv[et]; let draw=null; const teams={};
+    for(const m of arr){
+      const sub=(m.yes_sub_title||'').trim(); const mid=midYes(m);
+      if(mid==null) continue;
+      if(/^tie$/i.test(sub)) draw=mid; else teams[wcCanon(sub)]=mid;
+    }
+    const names=Object.keys(teams);
+    if(draw==null||names.length<2) continue;
+    const t=draw+teams[names[0]]+teams[names[1]]; if(t<=0) continue;
+    const rec={draw:draw/t, byTeam:{}, event:et};
+    rec.byTeam[names[0]]=teams[names[0]]/t; rec.byTeam[names[1]]=teams[names[1]]/t;
+    map.set([names[0],names[1]].sort().join('|'), rec);
+  }
+  return map;
+}
 async function loadWorldCup(){
   const status=document.getElementById('wc-status'), cont=document.getElementById('wc-container');
   status.style.display=''; status.textContent='Loading World Cup matches…'; cont.style.display='none'; cont.innerHTML='';
@@ -531,12 +605,19 @@ async function loadWorldCup(){
     for(let off=-1; off<=6; off++){ const d=new Date(now); d.setDate(d.getDate()+off);
       days.push(`${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`); }
     const seen=new Set(), events=[];
+    // Kick off Kalshi concurrently with ESPN (they're independent) so it doesn't
+    // add to the wall-clock; never throws.
+    const kalshiPromise = fetchWCKalshi().catch(()=>new Map());
     const results=await Promise.all(days.map(dt=>
       fetch(`${WC_ESPN}/scoreboard?dates=${dt}`).then(r=>r.ok?r.json():null).catch(()=>null)));
     for(const d of results){ for(const e of (d&&d.events||[])){ if(!seen.has(e.id)){ seen.add(e.id); events.push(e); } } }
     events.sort((a,b)=> new Date(a.date)-new Date(b.date));
     if(!events.length){ status.textContent='No World Cup matches in the next several days.'; return; }
-    let html='', lastDay='';
+    // Two-phase render: paint immediately with Elo + Vegas (fast, from ESPN),
+    // then re-paint with Kalshi prices when that background fetch resolves — a
+    // slow/flaky Kalshi proxy can never hang or block the view.
+    const paint = (kMap) => {
+      let html='', lastDay='';
     for(const e of events){
       const c=e.competitions[0]; const comps=c.competitors;
       const home=comps.find(t=>t.homeAway==='home')||comps[0];
@@ -558,20 +639,54 @@ async function loadWorldCup(){
       else if(done) centerHtml=`<div class="live-final">FULL TIME</div><span class="mkt-status-badge badge-no-mkt">FT</span>`;
       else centerHtml=`<div class="at-badge">vs</div><div class="game-time">${new Date(e.date).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}</div>`;
 
-      // prediction (consensus-style 3-way bar)
+      // ── multi-source prediction: Elo model + Vegas (DraftKings/ESPN) + Kalshi ──
       let predBlock='';
       if(hr!=null && ar!=null){
         const hfa = WC_HOSTS.has(hn)?60:(WC_HOSTS.has(an)?-60:0);
-        const p=wcProbs(hr,ar,hfa);  // p.w = home win, p.l = away win, p.d = draw
-        const Wh=Math.round(p.w*100), D=Math.round(p.d*100), Wa=Math.round(p.l*100);
-        const homeFav=p.w>p.l;
-        const pickHtml = Math.abs(p.w-p.l)<0.06
+        const ep=wcProbs(hr,ar,hfa);                 // ep.w=home, ep.l=away, ep.d=draw
+        const elo={wa:ep.l, d:ep.d, wh:ep.w};
+        const vegas=wcVegas(c);                       // {wa,d,wh,...} or null
+        let kal=null;                                 // Kalshi {wa,d,wh,event} or null
+        const ch=wcCanon(hn), ca=wcCanon(an);
+        const krec=kMap.get([ch,ca].sort().join('|'));
+        if(krec && krec.byTeam[ch]!=null && krec.byTeam[ca]!=null)
+          kal={wa:krec.byTeam[ca], d:krec.draw, wh:krec.byTeam[ch], event:krec.event};
+        // weighted blend — markets lead (Vegas 50 / Kalshi 25), Elo model 25
+        const parts=[{w:0.25,v:elo}];
+        if(vegas) parts.push({w:0.50,v:vegas});
+        if(kal)   parts.push({w:0.25,v:kal});
+        const tw=parts.reduce((s,p)=>s+p.w,0);
+        const cons={wa:parts.reduce((s,p)=>s+p.v.wa*p.w,0)/tw,
+                    d :parts.reduce((s,p)=>s+p.v.d *p.w,0)/tw,
+                    wh:parts.reduce((s,p)=>s+p.v.wh*p.w,0)/tw};
+        const srcN=parts.length;
+        const Wa=Math.round(cons.wa*100), D=Math.round(cons.d*100), Wh=Math.round(cons.wh*100);
+        const homeFav=cons.wh>cons.wa;
+        const pickHtml = Math.abs(cons.wh-cons.wa)<0.06
           ? `<span class="consensus-pick cp-even">Too Close</span>`
           : `<span class="consensus-pick ${homeFav?'cp-home':'cp-away'}">Favors ${homeFav?hAbbr:aAbbr}</span>`;
-        predBlock=`
+        const pc=x=>Math.round(x*100)+'%';
+        // 3-way source row: reuses the MLB .source-row grid, mini 3-seg bar, draw in detail slot
+        function wcSrc(cls,icon,label,s,detail){
+          if(!s) return `<div class="source-row ${cls}"><div class="src-label">${icon} ${label}</div><div class="src-na">Not available</div></div>`;
+          return `<div class="source-row ${cls}">
+            <div class="src-label">${icon} ${label}</div>
+            <div class="src-away">${pc(s.wa)}</div>
+            <div><div class="src-bar-track" style="display:flex">
+              <div style="width:${(s.wa*100).toFixed(0)}%;background:linear-gradient(90deg,#b91c1c,#ef4444)"></div>
+              <div style="width:${(s.d*100).toFixed(0)}%;background:#5a6573"></div>
+              <div style="width:${(s.wh*100).toFixed(0)}%;background:linear-gradient(90deg,#2563eb,#3b82f6)"></div>
+            </div></div>
+            <div class="src-home">${pc(s.wh)}</div>
+            <div class="src-detail">D ${pc(s.d)}${detail?' · '+detail:''}</div>
+          </div>`;
+        }
+        const vegasDetail = vegas?`${fmtML(vegas.awayML)}/${fmtML(vegas.drawML)}/${fmtML(vegas.homeML)}`:null;
+        const kalDetail   = kal?`${Math.round(kal.wa*100)}¢/${Math.round(kal.d*100)}¢/${Math.round(kal.wh*100)}¢`:null;
+        const consensusBlock=`
         <div class="consensus-block">
           <div class="consensus-header">
-            <span class="consensus-title">&#x26BD; Elo Model <span style="font-weight:400;opacity:.6;font-size:.6rem">win / draw / win</span></span>
+            <span class="consensus-title">&#x1F3AF; Consensus <span style="font-weight:400;opacity:.6;font-size:.6rem">${srcN} source${srcN!==1?'s':''} · W/D/W</span></span>
             ${pickHtml}
           </div>
           <div class="consensus-bar-row">
@@ -587,6 +702,16 @@ async function loadWorldCup(){
             <div class="cb-abbr home">${hAbbr}</div>
           </div>
         </div>`;
+        const sourcesPanel=`
+        <div class="sources-panel">
+          ${wcSrc('src-model','&#x26BD;','Elo Model',elo,null)}
+          ${wcSrc('src-vegas','&#x1F4B0;',(vegas?vegas.provider:'DraftKings'),vegas,vegasDetail)}
+          ${wcSrc('src-kalshi','&#x26A1;','Kalshi',kal,kalDetail)}
+        </div>`;
+        const ouHtml = (vegas&&vegas.overUnder!=null)?`<span class="edge-label">O/U</span><span class="vol-badge">${vegas.overUnder}</span>`:'';
+        const kLink  = kal?`<a class="kalshi-link" href="https://kalshi.com/markets/kxwcgame" target="_blank" rel="noopener">&#x26A1; Kalshi &#x2197;</a>`:'';
+        const footerRow = (ouHtml||kLink)?`<div class="edge-row" style="cursor:default"><div class="edge-left">${ouHtml}</div>${kLink}</div>`:'';
+        predBlock = consensusBlock + sourcesPanel + footerRow;
       } else {
         predBlock=`<div class="consensus-block"><div class="wc-pick" style="color:var(--dim2)">No Elo rating for ${hr==null?hn:an} — prediction unavailable</div></div>`;
       }
@@ -614,7 +739,10 @@ async function loadWorldCup(){
         ${predBlock}
       </div>`;
     }
-    cont.innerHTML=html; status.style.display='none'; cont.style.display='flex';
+      cont.innerHTML=html; status.style.display='none'; cont.style.display='flex';
+    };
+    paint(new Map());                                    // phase 1 — instant (Elo + Vegas)
+    kalshiPromise.then(km=>{ if(km && km.size && ACTIVE_VIEW==='wc') paint(km); }).catch(()=>{}); // phase 2 — enrich with Kalshi
   }catch(err){ status.textContent='Could not load World Cup data: '+err.message; }
 }
 
