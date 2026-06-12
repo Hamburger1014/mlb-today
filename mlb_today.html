@@ -542,38 +542,76 @@ async function loadWorldCup(){
       const home=comps.find(t=>t.homeAway==='home')||comps[0];
       const away=comps.find(t=>t.homeAway==='away')||comps[1];
       const hn=home.team.displayName, an=away.team.displayName;
+      const hAbbr=home.team.abbreviation||hn.slice(0,3).toUpperCase();
+      const aAbbr=away.team.abbreviation||an.slice(0,3).toUpperCase();
       const hr=eloFor(hn), ar=eloFor(an);
       const st=c.status.type; const live=st.state==='in', done=st.state==='post';
       const dayLabel=new Date(e.date).toLocaleDateString([],{weekday:'short',month:'short',day:'numeric'});
       if(dayLabel!==lastDay){ html+=`<div class="wc-day">${dayLabel}</div>`; lastDay=dayLabel; }
       const hImg=home.team.logo||'', aImg=away.team.logo||'';
-      const hScore=home.score!=null?home.score:'', aScore=away.score!=null?away.score:'';
-      const mid = (live||done)
-        ? `<div class="wc-mid"><div class="wc-score">${aScore} – ${hScore}</div><div>${done?'FT':st.shortDetail||'LIVE'}</div></div>`
-        : `<div class="wc-mid">${new Date(e.date).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}<br>${st.shortDetail||''}</div>`;
-      let pred='';
+      const hasScore=(live||done) && home.score!=null && away.score!=null;
+      const aScoreHtml=hasScore?`<span class="live-score${+away.score>+home.score?' winning':''}">${away.score}</span>`:'';
+      const hScoreHtml=hasScore?`<span class="live-score${+home.score>+away.score?' winning':''}">${home.score}</span>`:'';
+      // center column: live status / FT / kickoff time — mirrors MLB game-center
+      let centerHtml;
+      if(live) centerHtml=`<div class="live-inn">${st.shortDetail||'LIVE'}</div><span class="mkt-status-badge badge-live-mkt">&#x1F534; LIVE</span>`;
+      else if(done) centerHtml=`<div class="live-final">FULL TIME</div><span class="mkt-status-badge badge-no-mkt">FT</span>`;
+      else centerHtml=`<div class="at-badge">vs</div><div class="game-time">${new Date(e.date).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}</div>`;
+
+      // prediction (consensus-style 3-way bar)
+      let predBlock='';
       if(hr!=null && ar!=null){
-        // host gets a small home bump
         const hfa = WC_HOSTS.has(hn)?60:(WC_HOSTS.has(an)?-60:0);
-        const p=wcProbs(hr,ar,hfa);
-        const W=Math.round(p.w*100), D=Math.round(p.d*100), L=Math.round(p.l*100);
-        const best = p.w>=p.d&&p.w>=p.l ? hn+' win' : (p.l>=p.d ? an+' win' : 'Draw');
-        pred=`<div class="wc-bar">
-            <div class="wseg wc-w" style="width:${W}%" title="${an} win ${L}%">${W>11?W+'%':''}</div>
-            <div class="wseg wc-d" style="width:${D}%" title="Draw ${D}%">${D>11?'D '+D+'%':''}</div>
-            <div class="wseg wc-l" style="width:${L}%" title="${hn} win? ">${L>11?L+'%':''}</div>
+        const p=wcProbs(hr,ar,hfa);  // p.w = home win, p.l = away win, p.d = draw
+        const Wh=Math.round(p.w*100), D=Math.round(p.d*100), Wa=Math.round(p.l*100);
+        const homeFav=p.w>p.l;
+        const pickHtml = Math.abs(p.w-p.l)<0.06
+          ? `<span class="consensus-pick cp-even">Too Close</span>`
+          : `<span class="consensus-pick ${homeFav?'cp-home':'cp-away'}">Favors ${homeFav?hAbbr:aAbbr}</span>`;
+        predBlock=`
+        <div class="consensus-block">
+          <div class="consensus-header">
+            <span class="consensus-title">&#x26BD; Elo Model <span style="font-weight:400;opacity:.6;font-size:.6rem">win / draw / win</span></span>
+            ${pickHtml}
           </div>
-          <div class="wc-pick">Model lean: <b>${best}</b> · ${an} ${W}% / Draw ${D}% / ${hn} ${L}% <span style="color:var(--dim2)">(Elo ${ar} vs ${hr})</span></div>`;
+          <div class="consensus-bar-row">
+            <div class="cb-abbr away">${aAbbr}</div>
+            <div>
+              <div class="consensus-bar-track" style="display:flex">
+                <div style="width:${Wa}%;background:linear-gradient(90deg,#b91c1c,#ef4444)"></div>
+                <div style="width:${D}%;background:#5a6573"></div>
+                <div style="width:${Wh}%;background:linear-gradient(90deg,#2563eb,#3b82f6)"></div>
+              </div>
+              <div class="consensus-vals"><span class="cv away">${Wa}%</span><span style="color:var(--dim2);font-size:.72rem">Draw ${D}%</span><span class="cv home">${Wh}%</span></div>
+            </div>
+            <div class="cb-abbr home">${hAbbr}</div>
+          </div>
+        </div>`;
       } else {
-        pred=`<div class="wc-pick" style="color:var(--dim2)">No Elo rating for ${hr==null?hn:an} — prediction unavailable</div>`;
+        predBlock=`<div class="consensus-block"><div class="wc-pick" style="color:var(--dim2)">No Elo rating for ${hr==null?hn:an} — prediction unavailable</div></div>`;
       }
-      html+=`<div class="wc-card">
-        <div class="wc-top">
-          <div class="wc-team">${aImg?`<img src="${aImg}" alt="">`:''}<span>${an}</span></div>
-          ${mid}
-          <div class="wc-team away"><span>${hn}</span>${hImg?`<img src="${hImg}" alt="">`:''}</div>
+
+      html+=`<div class="game-card">
+        <div class="card-header">
+          <div class="team-side away">
+            <div class="team-logo-name">
+              ${aImg?`<img class="team-logo" src="${aImg}" alt="" onerror="this.style.display='none'"/>`:''}
+              <span class="team-name">${aAbbr}</span>
+              ${aScoreHtml}
+            </div>
+            <span class="team-record">${an}${ar!=null?' &middot; '+ar:''}</span>
+          </div>
+          <div class="game-center">${centerHtml}</div>
+          <div class="team-side home">
+            <div class="team-logo-name">
+              ${hScoreHtml}
+              <span class="team-name">${hAbbr}</span>
+              ${hImg?`<img class="team-logo" src="${hImg}" alt="" onerror="this.style.display='none'"/>`:''}
+            </div>
+            <span class="team-record">${hn}${hr!=null?' &middot; '+hr:''}</span>
+          </div>
         </div>
-        ${pred}
+        ${predBlock}
       </div>`;
     }
     cont.innerHTML=html; status.style.display='none'; cont.style.display='flex';
