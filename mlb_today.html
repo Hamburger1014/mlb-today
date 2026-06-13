@@ -445,6 +445,8 @@
 <!-- ── WORLD CUP VIEW ── -->
 <div id="wc-view" style="display:none">
   <div class="wc-intro">⚽ <b>World Cup 2026</b> · Consensus blends a <b>backtested Elo model</b> (Davidson tie model + confederation calibration — walk-forward log-loss 0.86 overall, with a large gain on cross-confederation matches, which is most of the World Cup) with the <b>DraftKings line</b> (via ESPN) and <b>Kalshi</b> market prices. ESPN has no soccer model of its own, so its odds <i>are</i> the DraftKings line.</div>
+  <div id="wc-stats-bar" style="font-size:.73rem;color:var(--dim);padding:5px 24px;background:#070f1c;border-bottom:1px solid var(--border);text-align:center;cursor:pointer" title="Click to show/hide the World Cup track record">&#x26BD; World Cup model · Loading…</div>
+  <div id="wc-track-record" style="display:none"></div>
   <main>
     <div id="wc-status" style="text-align:center;padding:30px;color:var(--dim)">Loading World Cup matches…</div>
     <div id="wc-container" style="display:none;flex-direction:column;gap:12px"></div>
@@ -635,6 +637,76 @@ function wcEvaluate(cons, vegas, kal, hAbbr, aAbbr){
   }
   return best;
 }
+// ── World Cup live track record (auto-grades the model on finished matches) ──
+const WC_LOG_KEY='wc_log_v1';
+let wcLog=(()=>{try{return JSON.parse(localStorage.getItem(WC_LOG_KEY)||'{}')||{};}catch(e){return {};}})();
+// Knockout: a draw is decided by extra time / penalties. Fold the draw into each
+// side's "advance" probability; tiebreak carries half the regulation skill edge.
+function wcAdvance(pH,pD,pA){
+  const dec=pH+pA; const r=dec>0?pH/dec:0.5; const t=0.5+0.5*(r-0.5);
+  return {h:pH+pD*t, a:pA+pD*(1-t)};
+}
+// Log each prediction pre-match; grade it from the real result once final.
+function wcGrade(events){
+  let changed=false;
+  for(const e of events){
+    const c=e.competitions[0], comps=c.competitors;
+    const home=comps.find(t=>t.homeAway==='home')||comps[0];
+    const away=comps.find(t=>t.homeAway==='away')||comps[1];
+    if(!home||!away) continue;
+    const hn=home.team.displayName, an=away.team.displayName;
+    const hr=eloFor(hn), ar=eloFor(an); if(hr==null||ar==null) continue;
+    const stage=(e.season&&e.season.slug)||''; const ko=!!stage && !/group/i.test(stage);
+    const hfa=WC_HOSTS.has(hn)?100:(WC_HOSTS.has(an)?-100:0);
+    const p=wcProbs(hr+confOff(hn), ar+confOff(an), hfa); // {w:home,d,l:away}
+    const done=c.status.type.state==='post';
+    const id=e.id;
+    const rec=wcLog[id]||(wcLog[id]={date:(e.date||'').slice(0,10),hAbbr:home.team.abbreviation||hn.slice(0,3).toUpperCase(),aAbbr:away.team.abbreviation||an.slice(0,3).toUpperCase()});
+    if(rec.res==null){ rec.pH=p.w; rec.pD=p.d; rec.pA=p.l; rec.ko=ko; changed=true; }
+    if(done && rec.res==null && home.score!=null && away.score!=null){
+      const hs=+home.score, as_=+away.score;
+      rec.res=hs>as_?'H':(hs===as_?'D':'A'); rec.hs=hs; rec.as=as_; changed=true;
+    }
+  }
+  if(changed){ try{localStorage.setItem(WC_LOG_KEY,JSON.stringify(wcLog));}catch(e){} }
+}
+function wcGraded(){ return Object.values(wcLog).filter(e=>e.res!=null); }
+function wcStatText(){
+  const g=wcGraded();
+  if(!g.length) return '&#x26BD; World Cup model · auto-grading from finished matches… <span style="color:var(--dim2)">(click for track record)</span>';
+  const idx={H:0,D:1,A:2}; let acc=0,ll=0;
+  for(const e of g){const pr=[e.pH,e.pD,e.pA],o=idx[e.res]; if(pr.indexOf(Math.max(...pr))===o)acc++; ll+=-Math.log(Math.max(1e-6,pr[o]));}
+  return `&#x26BD; World Cup model · ${g.length} graded · ${Math.round(acc/g.length*100)}% outcomes called · log-loss ${(ll/g.length).toFixed(3)} <span style="color:var(--dim2)">· click for track record</span>`;
+}
+function buildWCTrackRecord(){
+  const el=document.getElementById('wc-track-record'); if(!el) return;
+  const g=wcGraded();
+  if(!g.length){ el.innerHTML=`<div class="tr-wrap"><div class="tr-head">&#x1F4C8; World Cup model — live track record</div><div class="tr-empty">No finished matches graded yet. The model auto-logs each prediction and grades it from the real result as matches finish. Backtest baseline: log-loss ~0.86, ~60% favorites called.</div></div>`; return; }
+  const idx={H:0,D:1,A:2}; let acc=0,ll=0,favHit=0,favN=0;
+  for(const e of g){
+    const pr=[e.pH,e.pD,e.pA], o=idx[e.res];
+    if(pr.indexOf(Math.max(...pr))===o) acc++;
+    ll+=-Math.log(Math.max(1e-6,pr[o]));
+    if(e.pH>e.pD&&e.pH>e.pA){favN++; if(e.res==='H')favHit++;}
+    else if(e.pA>e.pD&&e.pA>e.pH){favN++; if(e.res==='A')favHit++;}
+  }
+  const n=g.length;
+  const rows=g.slice().reverse().slice(0,12).map(e=>{
+    const pr=[e.pH,e.pD,e.pA], names=['H','D','A']; const pick=names[pr.indexOf(Math.max(...pr))];
+    const ok=pick===e.res; const lbl={H:e.hAbbr,D:'Draw',A:e.aAbbr};
+    return `<div class="tr-row"><span>${e.aAbbr} ${e.as!=null?e.as:''}–${e.hs!=null?e.hs:''} ${e.hAbbr}</span><span>pick <b>${lbl[pick]}</b> · ${ok?'<span style="color:var(--green)">✓</span>':'<span style="color:#f87171">✗</span>'} (${Math.round(Math.max(...pr)*100)}%)</span></div>`;
+  }).join('');
+  el.innerHTML=`<div class="tr-wrap">
+    <div class="tr-head">&#x1F4C8; World Cup model — live track record <span class="tr-sub">${n} matches graded · auto-updated from real results</span></div>
+    <div class="tr-kpis">
+      <div class="tr-kpi"><div class="tr-big">${Math.round(acc/n*100)}%</div><div class="tr-lbl">Outcome called ${acc}/${n}</div></div>
+      <div class="tr-kpi"><div class="tr-big">${(ll/n).toFixed(3)}</div><div class="tr-lbl">Log-loss (lower better)</div></div>
+      <div class="tr-kpi"><div class="tr-big ${favN&&favHit/favN>=0.6?'tr-good':''}">${favN?Math.round(favHit/favN*100)+'%':'—'}</div><div class="tr-lbl">Favorite won ${favHit}/${favN}</div></div>
+    </div>
+    <div class="tr-tiers">${rows}</div>
+    <div class="tr-foot">Pick = model's most likely of win / draw / win. Backtest baseline: log-loss ~0.86, ~60% favorites. Sample grows each match day — this is the honest forward test of the model.</div>
+  </div>`;
+}
 async function loadWorldCup(){
   const status=document.getElementById('wc-status'), cont=document.getElementById('wc-container');
   status.style.display=''; status.textContent='Loading World Cup matches…'; cont.style.display='none'; cont.innerHTML='';
@@ -652,6 +724,10 @@ async function loadWorldCup(){
     for(const d of results){ for(const e of (d&&d.events||[])){ if(!seen.has(e.id)){ seen.add(e.id); events.push(e); } } }
     events.sort((a,b)=> new Date(a.date)-new Date(b.date));
     if(!events.length){ status.textContent='No World Cup matches in the next several days.'; return; }
+    // auto-grade the model on any finished matches, refresh the track-record bar
+    wcGrade(events);
+    const wcSb=document.getElementById('wc-stats-bar'); if(wcSb) wcSb.innerHTML=wcStatText();
+    if(document.getElementById('wc-track-record') && document.getElementById('wc-track-record').style.display!=='none') buildWCTrackRecord();
     // Two-phase render: paint immediately with Elo + Vegas (fast, from ESPN),
     // then re-paint with Kalshi prices when that background fetch resolves — a
     // slow/flaky Kalshi proxy can never hang or block the view.
@@ -666,6 +742,7 @@ async function loadWorldCup(){
       const aAbbr=away.team.abbreviation||an.slice(0,3).toUpperCase();
       const hr=eloFor(hn), ar=eloFor(an);
       const st=c.status.type; const live=st.state==='in', done=st.state==='post';
+      const _stage=(e.season&&e.season.slug)||''; const ko=!!_stage && !/group/i.test(_stage);
       const dayLabel=new Date(e.date).toLocaleDateString([],{weekday:'short',month:'short',day:'numeric'});
       if(dayLabel!==lastDay){ html+=`<div class="wc-day">${dayLabel}</div>`; lastDay=dayLabel; }
       const hImg=home.team.logo||'', aImg=away.team.logo||'';
@@ -744,6 +821,7 @@ async function loadWorldCup(){
             </div>
             <div class="cb-abbr home">${hAbbr}</div>
           </div>
+          ${ko?(()=>{const av=wcAdvance(cons.wh,cons.d,cons.wa);const ah=Math.round(av.h*100),aa=Math.round(av.a*100);const f=av.h>=av.a;return `<div style="margin-top:8px;text-align:center;font-size:.72rem;color:#fbbf24">&#x1F3C6; Knockout · <b>${f?hAbbr:aAbbr}</b> to advance <b>${Math.max(ah,aa)}%</b> <span style="color:var(--dim2)">(draw → extra time / penalties)</span></div>`;})():''}
         </div>`;
         const sourcesPanel=`
         <div class="sources-panel">
@@ -2851,6 +2929,11 @@ document.getElementById('refresh-btn').addEventListener('click', init);
   if(bar&&panel) bar.addEventListener('click',()=>{
     if(panel.style.display==='none'){ buildTrackRecord(); panel.style.display='block'; }
     else panel.style.display='none';
+  });
+  const wbar=document.getElementById('wc-stats-bar'), wpanel=document.getElementById('wc-track-record');
+  if(wbar&&wpanel) wbar.addEventListener('click',()=>{
+    if(wpanel.style.display==='none'){ buildWCTrackRecord(); wpanel.style.display='block'; }
+    else wpanel.style.display='none';
   });
 })();
 </script>
