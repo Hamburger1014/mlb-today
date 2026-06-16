@@ -2109,8 +2109,11 @@ function renderGame(game, extras){
   // ── VALUE: YOUR MODEL's probability vs Kalshi price ─────────────
   //   The model is the edge-finder; sharp books are shown only as a check.
   const _so = sharpFairFor(homeName, awayName, gameTime);
-  const fairHomeSharp = _so ? _so.fairHome : null;
-  const fairBooks     = _so ? _so.nBooks   : 0;
+  // Prefer the 9-book Odds API consensus; if no Odds key is set, fall back to the
+  // DraftKings line ESPN already carries (1 book) so the books-agree check is live
+  // either way. Auto-upgrades to the multi-book consensus once a key is configured.
+  const fairHomeSharp = _so ? _so.fairHome : ((odds && odds.homeP!=null) ? odds.homeP : null);
+  const fairBooks     = _so ? _so.nBooks   : ((odds && odds.homeP!=null) ? 1 : 0);
   const _asks = kalshiAsks(kalshiEvent,homeAbbr,homeName,awayAbbr,awayName);
   const bet = _asks ? evaluateBet(modelHomeP, _asks, homeAbbr, awayAbbr) : null;
   const _isLive  = status==='Live' || status==='In Progress';
