@@ -1227,11 +1227,21 @@ function modelConfidence(p){
 }
 
 // ── Log today's predictions (call after computing modelP) ────────
-function nnLogPrediction(gamePk,rawP,homeAbbr,awayAbbr){
-  if(!gamePk||nnGameLog.some(e=>e.id==gamePk)) return;
+function nnLogPrediction(gamePk,rawP,homeAbbr,awayAbbr,projTotal,ouLine){
+  if(!gamePk) return;
+  const pt=(projTotal!=null&&!isNaN(projTotal))?+(+projTotal).toFixed(2):null;
+  const ol=(ouLine!=null&&!isNaN(ouLine))?+ouLine:null;
+  const ex=nnGameLog.find(e=>e.id==gamePk);
+  if(ex){ // already logged — backfill totals fields if they were missing
+    let ch=false;
+    if(ex.projTotal==null&&pt!=null){ ex.projTotal=pt; ch=true; }
+    if(ex.ouLine==null&&ol!=null){ ex.ouLine=ol; ch=true; }
+    if(ch){ try{localStorage.setItem(NN_LOG_KEY,JSON.stringify(nnGameLog));}catch(e){} }
+    return;
+  }
   const today=new Date().toISOString().slice(0,10);
   nnGameLog=nnGameLog.filter(e=>e.date>=(today.slice(0,7)+'-01')).slice(-200);
-  nnGameLog.push({id:gamePk,rawP,homeAbbr,awayAbbr,date:today,result:null});
+  nnGameLog.push({id:gamePk,rawP,homeAbbr,awayAbbr,date:today,result:null,projTotal:pt,ouLine:ol});
   try{localStorage.setItem(NN_LOG_KEY,JSON.stringify(nnGameLog));}catch(e){}
 }
 
@@ -1299,7 +1309,15 @@ function buildTrackRecord(){
       <div class="tr-kpi"><div class="tr-big">${recent.n?recent.pct+'%':'—'}</div><div class="tr-lbl">Last 14d ${recent.w}–${recent.l}</div></div>
     </div>
     <div class="tr-tiers">${tierRows}</div>
-    <div class="tr-foot">Pick = calibrated model favorite. Buckets show whether confidence translates to live accuracy. Backtest expectation: ~57% overall, 60–66% confident. Sample grows daily.</div>
+    ${(()=>{
+      const ou=nnGameLog.filter(e=>e.actualTotal!=null&&e.projTotal!=null&&e.ouLine!=null);
+      const leans=ou.filter(e=>Math.abs(e.projTotal-e.ouLine)>=0.5 && e.actualTotal!==e.ouLine);
+      if(!leans.length) return `<div class="tr-tiers"><div class="tr-row"><span>&#x1F3B2; O/U leans vs market</span><span style="color:var(--dim2)">grading… (${ou.length} totals logged)</span></div></div>`;
+      const hit=leans.filter(e=>(e.projTotal>e.ouLine)===(e.actualTotal>e.ouLine)).length;
+      const pct=Math.round(hit/leans.length*100);
+      return `<div class="tr-tiers"><div class="tr-row"><span>&#x1F3B2; O/U leans vs market (&ge;0.5 gap)</span><span><b>${hit}&ndash;${leans.length-hit}</b> (${pct}%) · ${pct>=53&&leans.length>=20?'<span style="color:var(--green)">edge — eligible for Best Bets</span>':'building sample'}</span></div></div>`;
+    })()}
+    <div class="tr-foot">Pick = calibrated model favorite. Buckets show whether confidence translates to live accuracy. Backtest: ~57% overall, 60–66% confident. <b>O/U</b> is forward-tested here (proj total vs the DraftKings line vs the real result) and only promoted to Best Bets once it shows a real edge over ≥20 leans. Sample grows daily.</div>
   </div>`;
 }
 
@@ -2052,7 +2070,7 @@ function renderGame(game, extras){
     ? `<div class="proj-score" title="Score split from the win model (favored team always higher); total from the weather-aware totals model${wxNote}. Not exact finals.">&#x1F52E; Projected: <b>${awayAbbr} ${proj.away.toFixed(1)} – ${proj.home.toFixed(1)} ${homeAbbr}</b> <span class="proj-tot">· total ${projTotal.toFixed(1)}</span>${leanHtml}</div>`
     : '';
   const parkAdjActive    = modelResult.parkAdjActive;
-  if(game.gamePk && modelResult.rawP!=null) nnLogPrediction(game.gamePk, modelResult.rawP, homeAbbr, awayAbbr);
+  if(game.gamePk && modelResult.rawP!=null) nnLogPrediction(game.gamePk, modelResult.rawP, homeAbbr, awayAbbr, projTotal, ouLine);
 
   // Apply injury adjustment on top of model
   const hInjPre = (injuries[homeAbbr]||[]);
@@ -2570,13 +2588,16 @@ async function autoCalibrateFromResults(){
         if((g.status?.codedGameState)!=='F') continue;
         const hs=g.teams?.home?.score, as=g.teams?.away?.score;
         if(hs==null||as==null||hs===as) continue;
-        finals[g.gamePk]=hs>as?1:0;
+        finals[g.gamePk]={hw:hs>as?1:0, total:hs+as};
       }
     }
-    let n=0;
+    let n=0, tot=0;
     for(const e of pending){
-      if(finals[e.id]!=null && nnLogResult(e.id, finals[e.id]===1)) n++;
+      const f=finals[e.id]; if(f==null) continue;
+      if(nnLogResult(e.id, f.hw===1)) n++;
+      if(e.actualTotal==null){ e.actualTotal=f.total; tot++; }   // O/U forward-test
     }
+    if(tot>0){ try{localStorage.setItem(NN_LOG_KEY,JSON.stringify(nnGameLog));}catch(e){} }
     if(n>0) console.info(`Auto-calibrated on ${n} real result(s). Platt a=${NN_PLATT.a.toFixed(3)} b=${NN_PLATT.b.toFixed(3)}`);
   }catch(err){ console.warn('Auto-calibration skipped:',err.message); }
 }
