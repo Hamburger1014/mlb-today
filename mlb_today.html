@@ -637,6 +637,28 @@ function wcEvaluate(cons, vegas, kal, hAbbr, aAbbr){
   }
   return best;
 }
+// ── Best Bets realized-ROI tracker (forward-logged, auto-graded) ──────────────
+// Each best bet is logged pregame (pick + Kalshi ask price), then graded W/L from
+// the real result. ROI uses the SAME basis as the model's expected EV: per bet you
+// risk `price` for a $1 contract, net profit = (won?1:0) − price − fee, and
+// ROI = Σ net profit / Σ risked. Fee = Kalshi's ≈0.07·p·(1−p). Honest forward test.
+const BETS_LOG_KEY='bets_log_v1';
+let betsLog=(()=>{try{return JSON.parse(localStorage.getItem(BETS_LOG_KEY)||'{}')||{};}catch(e){return {};}})();
+function _betsSave(){ try{localStorage.setItem(BETS_LOG_KEY,JSON.stringify(betsLog));}catch(e){} }
+function logBet(id, rec){ if(id && rec && !betsLog[id] && rec.price>0.01 && rec.price<0.99){ betsLog[id]={...rec, result:null}; _betsSave(); } }
+function gradeBet(id, win){ const b=betsLog[id]; if(b && b.result==null){ b.result=win?'W':'L'; _betsSave(); } }
+function betsROI(league){
+  const g=Object.values(betsLog).filter(b=>b.result!=null && (!league||b.league===league));
+  let risked=0, profit=0, w=0;
+  for(const b of g){ const p=b.price, fee=KALSHI_FEE*p*(1-p); risked+=p; profit+=(b.result==='W'?1:0)-p-fee; if(b.result==='W')w++; }
+  return {n:g.length, w, l:g.length-w, roi:risked>0?profit/risked:0, profit, risked};
+}
+function betsROIHtml(league){
+  const r=betsROI(league);
+  if(!r.n) return `<div class="bb-foot">&#x1F4CA; Realized ROI: no settled bets yet — every pick above is auto-graded from the real result as games finish, and the running ROI shows here.</div>`;
+  const pos=r.roi>=0;
+  return `<div class="bb-foot">&#x1F4CA; <b>Realized: ${r.w}&ndash;${r.l}</b> · <b style="color:${pos?'var(--green)':'#f87171'}">${pos?'+':''}${(r.roi*100).toFixed(1)}% ROI</b> over ${r.n} settled bet${r.n!==1?'s':''} <span style="color:var(--dim2)">· ${pos?'+':''}${r.profit.toFixed(2)}u on ${r.risked.toFixed(2)}u risked, net of est. fees. Auto-graded from real results.</span></div>`;
+}
 // ── World Cup live track record (auto-grades the model on finished matches) ──
 const WC_LOG_KEY='wc_log_v1';
 let wcLog=(()=>{try{return JSON.parse(localStorage.getItem(WC_LOG_KEY)||'{}')||{};}catch(e){return {};}})();
@@ -666,6 +688,12 @@ function wcGrade(events){
     if(done && rec.res==null && home.score!=null && away.score!=null){
       const hs=+home.score, as_=+away.score;
       rec.res=hs>as_?'H':(hs===as_?'D':'A'); rec.hs=hs; rec.as=as_; changed=true;
+      // grade any best bet logged on this match
+      ['home','away','draw'].forEach(side=>{
+        const bid='wc:'+id+':'+side;
+        if(betsLog[bid] && betsLog[bid].result==null)
+          gradeBet(bid, (side==='home'&&rec.res==='H')||(side==='away'&&rec.res==='A')||(side==='draw'&&rec.res==='D'));
+      });
     }
   }
   if(changed){ try{localStorage.setItem(WC_LOG_KEY,JSON.stringify(wcLog));}catch(e){} }
@@ -778,7 +806,7 @@ async function loadWorldCup(){
                     wh:parts.reduce((s,p)=>s+p.v.wh*p.w,0)/tw};
         // collect best-bets: only pregame, only where Kalshi price is +EV AND the
         // sharp DraftKings line agrees (handled inside wcEvaluate)
-        if(!done && !live){ const vb=wcEvaluate(cons,vegas,kal,hAbbr,aAbbr); if(vb) wcBets.push({matchup:`${aAbbr} v ${hAbbr}`, ...vb}); }
+        if(!done && !live){ const vb=wcEvaluate(cons,vegas,kal,hAbbr,aAbbr); if(vb){ wcBets.push({matchup:`${aAbbr} v ${hAbbr}`, ...vb}); logBet('wc:'+e.id+':'+vb.key, {league:'WC', date:(e.date||'').slice(0,10), matchup:`${aAbbr} v ${hAbbr}`, pick:vb.label, side:vb.key, price:vb.price}); } }
         const srcN=parts.length;
         const Wa=Math.round(cons.wa*100), D=Math.round(cons.d*100), Wh=Math.round(cons.wh*100);
         const homeFav=cons.wh>cons.wa;
@@ -862,14 +890,15 @@ async function loadWorldCup(){
     }
       // ── World Cup "Best Bets" card (mirrors the MLB one) ──
       const bbHtml = (()=>{
+        const roi=betsROIHtml('WC');
         const plays=wcBets.slice().sort((a,b)=>b.roi-a.roi);
-        if(!kMap.size) return `<div class="best-bets"><div class="bb-title">&#x1F3AF; World Cup Best Bets</div><div class="bb-empty">Comparing the consensus to live Kalshi prices…</div></div>`;
-        if(!plays.length) return `<div class="best-bets"><div class="bb-title">&#x1F3AF; World Cup Best Bets</div><div class="bb-empty">No World Cup edges vs Kalshi right now — the consensus agrees with the market. Sit tight.</div></div>`;
+        if(!kMap.size) return `<div class="best-bets"><div class="bb-title">&#x1F3AF; World Cup Best Bets</div><div class="bb-empty">Comparing the consensus to live Kalshi prices…</div>${roi}</div>`;
+        if(!plays.length) return `<div class="best-bets"><div class="bb-title">&#x1F3AF; World Cup Best Bets</div><div class="bb-empty">No World Cup edges vs Kalshi right now — the consensus agrees with the market. Sit tight.</div>${roi}</div>`;
         let rows='';
         for(const b of plays.slice(0,6)){
           rows+=`<div class="bb-row"><span class="bb-mu">${b.matchup}</span><span class="bb-pick">${b.label}</span><span class="bb-edge">+${(b.roi*100).toFixed(0)}% ROI</span><span class="bb-stake">${(b.stakeFrac*100).toFixed(1)}% bankroll</span> <span class="bb-ok">&#x2713; books</span></div>`;
         }
-        return `<div class="best-bets"><div class="bb-title">&#x1F3AF; World Cup Best Bets <span class="bb-count">${plays.length}</span></div>${rows}<div class="bb-foot">Value = blended consensus beats the Kalshi ask after fees, and the DraftKings sharp line agrees it's underpriced. The Elo model is NOT backtested — treat as estimates, not a tracked record. Not financial advice.</div></div>`;
+        return `<div class="best-bets"><div class="bb-title">&#x1F3AF; World Cup Best Bets <span class="bb-count">${plays.length}</span></div>${rows}<div class="bb-foot">Value = blended consensus beats the Kalshi ask after fees, and the DraftKings sharp line agrees it's underpriced. Expected ROI shown; realized ROI below. Not financial advice.</div>${roi}</div>`;
       })();
       cont.innerHTML=bbHtml+html; status.style.display='none'; cont.style.display='flex';
     };
@@ -2132,6 +2161,9 @@ function renderGame(game, extras){
       BEST_BETS.push({ matchup:`${awayAbbr}@${homeAbbr}`, team:bet.team, fair:bet.fair,
         price:bet.price, roi:bet.roi, stakeFrac:bet.stakeFrac, gamePk:game.gamePk,
         booksAgree: fairHomeSharp!=null ? booksAgree : null });
+      // Forward-log the bet for realized-ROI tracking (graded from the final score)
+      logBet('mlb:'+game.gamePk+':'+bet.team, {league:'MLB', date:new Date().toISOString().slice(0,10),
+        matchup:`${awayAbbr}@${homeAbbr}`, pick:bet.team, homeAbbr:homeAbbr, price:bet.price});
     }
   }
   // NOTE: totals (O/U) leans are intentionally NOT added to Best Bets — the
@@ -2577,8 +2609,9 @@ function evaluateBet(fairHome, asks, homeAbbr, awayAbbr){
 // ═══════════════════════════════════════════════════════════════
 async function autoCalibrateFromResults(){
   const pending=nnGameLog.filter(e=>e.result==null && e.id>0);
-  if(!pending.length) return;
-  const dates=pending.map(e=>e.date).sort();
+  const pendingBets=Object.values(betsLog).filter(b=>b.result==null && b.date && b.league==='MLB');
+  if(!pending.length && !pendingBets.length) return;
+  const dates=[...pending.map(e=>e.date), ...pendingBets.map(b=>b.date)].filter(Boolean).sort();
   const start=dates[0], end=new Date().toISOString().slice(0,10);
   try{
     const url=`https://statsapi.mlb.com/api/v1/schedule?sportId=1&startDate=${start}&endDate=${end}&hydrate=linescore`;
@@ -2601,6 +2634,12 @@ async function autoCalibrateFromResults(){
       if(e.actualTotal==null){ e.actualTotal=f.total; tot++; }   // O/U forward-test
     }
     if(tot>0){ try{localStorage.setItem(NN_LOG_KEY,JSON.stringify(nnGameLog));}catch(e){} }
+    // grade any logged MLB best bets from the same finals (realized ROI)
+    for(const bid in betsLog){
+      const b=betsLog[bid]; if(b.league!=='MLB'||b.result!=null) continue;
+      const f=finals[bid.split(':')[1]]; if(f==null) continue;
+      gradeBet(bid, (b.pick===b.homeAbbr)===(f.hw===1));
+    }
     if(n>0) console.info(`Auto-calibrated on ${n} real result(s). Platt a=${NN_PLATT.a.toFixed(3)} b=${NN_PLATT.b.toFixed(3)}`);
   }catch(err){ console.warn('Auto-calibration skipped:',err.message); }
 }
@@ -2926,9 +2965,10 @@ function renderBestBets(container, hdr){
   const valuePlays = BEST_BETS.filter(b=>!b.totals).sort((a,b)=>b.roi-a.roi);
   const card=document.createElement('div');
   card.className='best-bets';
+  const roi=betsROIHtml('MLB');
   if(!valuePlays.length){
     card.innerHTML=`<div class="bb-title">&#x1F3AF; Today's Best Bets</div>
-      <div class="bb-empty">No pregame model edges vs the market today — the model agrees with Kalshi. Sit tight.</div>`;
+      <div class="bb-empty">No pregame model edges vs the market today — the model agrees with Kalshi. Sit tight.</div>${roi}`;
   }else{
     let rows='';
     for(const b of valuePlays.slice(0,6)){
@@ -2940,7 +2980,7 @@ function renderBestBets(container, hdr){
     }
     card.innerHTML=`<div class="bb-title">&#x1F3AF; Today's Best Bets <span class="bb-count">${valuePlays.length}</span></div>
       ${rows}
-      <div class="bb-foot">Moneyline value only: model win prob beats the Kalshi price after fees. Over/under leans are shown per-game but excluded here until the totals model has a tracked record. Not financial advice.</div>`;
+      <div class="bb-foot">Moneyline value only: model win prob beats the Kalshi price after fees (expected ROI shown above; realized ROI below). Not financial advice.</div>${roi}`;
   }
   hdr.insertAdjacentElement('afterend', card);
 }
