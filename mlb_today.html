@@ -1946,6 +1946,63 @@ async function fetchKalshiMarkets(){
   }
 }
 
+// First-5-innings markets: Kalshi series KXMLBF5 (3-way — each team + Tie).
+// Single high-limit call (like the WC fix). Normalize yes_sub_title
+// ("Atlanta wins first 5 innings" → "Atlanta") so kalshiMktForTeam matches; tag Tie.
+async function fetchKalshiF5(){
+  const now=Math.floor(Date.now()/1000);
+  let d=null;
+  for(let i=0;i<3 && !d;i++){
+    try{ d=await kalshiPublicFetch(`/markets?series_ticker=KXMLBF5&status=open&min_close_ts=${now}&limit=1000`); }
+    catch(e){ d=null; if(i<2) await new Promise(r=>setTimeout(r,600*(i+1))); }
+  }
+  if(!d) return [];
+  const byEv={};
+  for(const m of (d.markets||[])){
+    const et=m.event_ticker; if(!et) continue;
+    const sub=(m.yes_sub_title||'');
+    const norm = /tie/i.test(sub) ? 'TIE' : sub.replace(/\s*wins first 5 innings/i,'').trim();
+    (byEv[et]=byEv[et]||{event_ticker:et, markets:[]}).markets.push({...m, yes_sub_title:norm});
+  }
+  return Object.values(byEv);
+}
+// 3-way de-vigged F5 market probs + raw asks from a matched KXMLBF5 event.
+function f5Market(ev, homeName, awayName){
+  if(!ev) return null;
+  const hm=kalshiMktForTeam(ev.markets, homeName), am=kalshiMktForTeam(ev.markets, awayName);
+  const tm=(ev.markets||[]).find(m=>m.yes_sub_title==='TIE');
+  if(!hm||!am||!tm) return null;
+  const mid=m=>{ const b=marketBidAsk(m); return (b.bid!=null&&b.ask!=null)?(b.bid+b.ask)/2:null; };
+  const mh=mid(hm), ma=mid(am), mt=mid(tm);
+  if(mh==null||ma==null||mt==null) return null;
+  const s=mh+ma+mt; if(s<=0) return null;
+  return {h:mh/s, t:mt/s, a:ma/s,
+    askH:marketBidAsk(hm).ask, askA:marketBidAsk(am).ask, askT:marketBidAsk(tm).ask,
+    event:ev.event_ticker};
+}
+// Best +EV F5 outcome: model prob vs Kalshi ask, fee-aware. STRICTER thresholds
+// than full-game (no sharp-book confirmation exists for the F5 market).
+function f5Evaluate(model, mkt, homeAbbr, awayAbbr){
+  if(!model||!mkt) return null;
+  const sides=[
+    {key:'home', pick:homeAbbr+' F5', fair:model.h, price:mkt.askH},
+    {key:'away', pick:awayAbbr+' F5', fair:model.a, price:mkt.askA},
+    {key:'tie',  pick:'Tie F5',       fair:model.t, price:mkt.askT},
+  ];
+  let best=null;
+  for(const s of sides){
+    if(s.price==null||isNaN(s.price)||s.price<=0.02||s.price>=0.98) continue;
+    const fee=KALSHI_FEE*s.price*(1-s.price);
+    const netEV=s.fair-s.price-fee, roi=netEV/s.price;
+    if(netEV>=0.025 && roi>=0.05){
+      const kelly=Math.max(0,(s.fair-s.price)/(1-s.price));
+      const stakeFrac=Math.min(0.05, KELLY_FRACTION*kelly);
+      if(!best||netEV>best.netEV) best={...s, fee, netEV, roi, stakeFrac};
+    }
+  }
+  return best;
+}
+
 // Find the Kalshi market in an event whose team (yes_sub_title, e.g. "Los Angeles D")
 // is a prefix of a full MLB team name (e.g. "Los Angeles Dodgers"). Disambiguates
 // the LA/NY/Chicago same-city pairs via the trailing nickname letter.
@@ -2073,7 +2130,7 @@ function fmtTime(iso){
 // ═══════════════════════════════════════════════════════════════
 function renderGame(game, extras){
   const {homeId,awayId,homeAbbr,awayAbbr,homeName,awayName,gameTime,status} = game;
-  const {espnGame, odds, odds2, predictor, kalshiEvent, injuries} = extras;
+  const {espnGame, odds, odds2, predictor, kalshiEvent, kalshiF5Event, injuries} = extras;
 
   // Log Result row — declared early (used later in card-detail template)
   const _logEntry = nnGameLog.find(x=>String(x.id)===String(game.gamePk));
@@ -2103,6 +2160,15 @@ function renderGame(game, extras){
   let modelHomeP = modelResult.p ?? 0.5;
   // FIRST 5 INNINGS (F5) — the headline prediction now. 3-way: home/tie/away leads after 5.
   const f5 = f5Probs(homeAbbr, awayAbbr, homeKBBq, awayKBBq);   // {h,t,a} or null
+  // F5 market (Kalshi KXMLBF5, 3-way) + model value play vs the ask
+  const f5mkt = f5Market(kalshiF5Event, homeName, awayName);    // {h,t,a,askH,askA,askT} or null
+  const f5bet = (f5 && f5mkt) ? f5Evaluate(f5, f5mkt, homeAbbr, awayAbbr) : null;
+  if(f5bet && (!game.live || game.live.homeScore==null)){       // pregame only
+    BEST_BETS.push({matchup:`${awayAbbr}@${homeAbbr}`, pick:f5bet.pick, fair:f5bet.fair,
+      price:f5bet.price, roi:f5bet.roi, stakeFrac:f5bet.stakeFrac, f5:true});
+    logBet('mlbf5:'+game.gamePk+':'+f5bet.key, {league:'MLBF5', date:new Date().toISOString().slice(0,10),
+      matchup:`${awayAbbr}@${homeAbbr}`, pick:f5bet.pick, side:f5bet.key, price:f5bet.price});
+  }
   const pitcherAdjActive = modelResult.pitcherAdjActive;
   // Projected score — DERIVED from the win model so the projected winner always
   // matches the model pick (run total from the score environment, split by the
@@ -2177,28 +2243,14 @@ function renderGame(game, extras){
   const bet = _asks ? evaluateBet(modelHomeP, _asks, homeAbbr, awayAbbr) : null;
   const _isLive  = status==='Live' || status==='In Progress';
   const _isFinal = status==='Final';
+  // ── F5 VALUE badge (model F5 prob vs Kalshi KXMLBF5 ask). Best Bets now F5. ──
   let betBadgeHtml = '';
-  if(bet && !_isFinal){
-    const booksAgree = (fairHomeSharp!=null) &&
-      ((bet.team===homeAbbr) === (fairHomeSharp >= bet.price));
-    const tag = (fairHomeSharp==null) ? '' : (booksAgree ? ' · ✓ books agree' : ' · ⚠ books disagree');
-    if(_isLive){
-      // Game in progress — model is pregame-stale, so this is NOT a real edge.
-      betBadgeHtml = `<span class="bet-badge bet-badge-live">&#x23F1;&#xFE0F; LIVE — model stale, not a pregame edge</span>`;
-    }else{
-      betBadgeHtml = `<span class="bet-badge">&#x1F3AF; MODEL VALUE ${bet.team} · ${(bet.fair*100).toFixed(0)}% vs ${(bet.price*100).toFixed(0)}&cent; · stake ${(bet.stakeFrac*100).toFixed(1)}%${tag}</span>`;
-      // Collect for the "Today's Best Bets" summary card (pregame value plays only)
-      BEST_BETS.push({ matchup:`${awayAbbr}@${homeAbbr}`, team:bet.team, fair:bet.fair,
-        price:bet.price, roi:bet.roi, stakeFrac:bet.stakeFrac, gamePk:game.gamePk,
-        booksAgree: fairHomeSharp!=null ? booksAgree : null });
-      // Forward-log the bet for realized-ROI tracking (graded from the final score)
-      logBet('mlb:'+game.gamePk+':'+bet.team, {league:'MLB', date:new Date().toISOString().slice(0,10),
-        matchup:`${awayAbbr}@${homeAbbr}`, pick:bet.team, homeAbbr:homeAbbr, price:bet.price});
-    }
+  if(f5bet && !_isFinal && !_isLive){
+    betBadgeHtml = `<span class="bet-badge">&#x1F3AF; F5 VALUE ${f5bet.pick} · model ${(f5bet.fair*100).toFixed(0)}% vs ${(f5bet.price*100).toFixed(0)}&cent; · stake ${(f5bet.stakeFrac*100).toFixed(1)}%</span>`;
+  } else if(_isLive && f5){
+    betBadgeHtml = `<span class="bet-badge bet-badge-live">&#x23F1;&#xFE0F; LIVE — F5 model is pregame, not a live edge</span>`;
   }
-  // NOTE: totals (O/U) leans are intentionally NOT added to Best Bets — the
-  // signal is unproven (weak backtest skill), so it stays an informational
-  // per-game lean only until we have real tracked results. (See per-game leanHtml.)
+  // (full-game O/U leans + full-game model value stay informational in Details only.)
 
   // Pitchers from ESPN (re-use from early extraction)
   const pitchers = espnGame?.pitchers;
@@ -2401,6 +2453,10 @@ function renderGame(game, extras){
         </div>
         <div class="cb-abbr home">${homeAbbr}</div>
       </div>
+      ${f5mkt?`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:8px;font-size:.72rem">
+        <span style="color:#c084fc">&#x26A1; Kalshi F5 <b>${Math.round(f5mkt.a*100)}</b>/${Math.round(f5mkt.t*100)}/<b>${Math.round(f5mkt.h*100)}</b></span>
+        ${f5bet?`<span style="color:var(--green);font-weight:800">&#x1F3AF; ${f5bet.pick} @ ${Math.round(f5bet.price*100)}&cent; · +${(f5bet.roi*100).toFixed(0)}% ROI</span>`:`<span style="color:var(--dim2)">model agrees — no edge</span>`}
+      </div>`:`<div style="margin-top:6px;font-size:.7rem;color:var(--dim2)">&#x26A1; No Kalshi F5 market matched yet</div>`}
     </div>`;
   }
 
@@ -2667,7 +2723,7 @@ function evaluateBet(fairHome, asks, homeAbbr, awayAbbr){
 // ═══════════════════════════════════════════════════════════════
 async function autoCalibrateFromResults(){
   const pending=nnGameLog.filter(e=>e.result==null && e.id>0);
-  const pendingBets=Object.values(betsLog).filter(b=>b.result==null && b.date && b.league==='MLB');
+  const pendingBets=Object.values(betsLog).filter(b=>b.result==null && b.date && (b.league==='MLB'||b.league==='MLBF5'));
   if(!pending.length && !pendingBets.length) return;
   const dates=[...pending.map(e=>e.date), ...pendingBets.map(b=>b.date)].filter(Boolean).sort();
   const start=dates[0], end=new Date().toISOString().slice(0,10);
@@ -2681,22 +2737,27 @@ async function autoCalibrateFromResults(){
       for(const g of (day.games||[])){
         if((g.status?.codedGameState)!=='F') continue;
         const hs=g.teams?.home?.score, as=g.teams?.away?.score;
-        if(hs==null||as==null||hs===as) continue;
-        finals[g.gamePk]={hw:hs>as?1:0, total:hs+as};
+        if(hs==null||as==null) continue;
+        const inn=g.linescore?.innings||[]; let f5=null;
+        if(inn.length>=5){ let fh=0,fa=0; for(let i=0;i<5;i++){ fh+=(inn[i].home?.runs||0); fa+=(inn[i].away?.runs||0); }
+          f5 = fh>fa?'H':(fa>fh?'A':'T'); }
+        finals[g.gamePk]={hw: hs===as?null:(hs>as?1:0), total:hs+as, f5};
       }
     }
     let n=0, tot=0;
     for(const e of pending){
-      const f=finals[e.id]; if(f==null) continue;
+      const f=finals[e.id]; if(f==null||f.hw==null) continue;
       if(nnLogResult(e.id, f.hw===1)) n++;
       if(e.actualTotal==null){ e.actualTotal=f.total; tot++; }   // O/U forward-test
     }
     if(tot>0){ try{localStorage.setItem(NN_LOG_KEY,JSON.stringify(nnGameLog));}catch(e){} }
-    // grade any logged MLB best bets from the same finals (realized ROI)
+    // grade logged best bets from the same finals (realized ROI)
     for(const bid in betsLog){
-      const b=betsLog[bid]; if(b.league!=='MLB'||b.result!=null) continue;
+      const b=betsLog[bid]; if(b.result!=null) continue;
       const f=finals[bid.split(':')[1]]; if(f==null) continue;
-      gradeBet(bid, (b.pick===b.homeAbbr)===(f.hw===1));
+      if(b.league==='MLB' && f.hw!=null) gradeBet(bid, (b.pick===b.homeAbbr)===(f.hw===1));        // legacy full-game
+      else if(b.league==='MLBF5' && f.f5) gradeBet(bid,                                            // first-5-innings
+        (b.side==='home'&&f.f5==='H')||(b.side==='away'&&f.f5==='A')||(b.side==='tie'&&f.f5==='T'));
     }
     if(n>0) console.info(`Auto-calibrated on ${n} real result(s). Platt a=${NN_PLATT.a.toFixed(3)} b=${NN_PLATT.b.toFixed(3)}`);
   }catch(err){ console.warn('Auto-calibration skipped:',err.message); }
@@ -2844,13 +2905,14 @@ async function init(){
   // Time-bound each: a slow/down endpoint (esp. the Kalshi worker proxy) must
   // never hang the whole render — the page shows whatever sources came back.
   const cap = (p, ms, fb) => Promise.race([p.catch(()=>fb), new Promise(r=>setTimeout(()=>r(fb), ms))]);
-  const [injuries, kalshiEvents] = await Promise.all([
+  const [injuries, kalshiEvents, , , , , kalshiF5Events] = await Promise.all([
     cap(fetchInjuries(), 10000, {}),
     cap(fetchKalshiMarkets(), 12000, []),
     cap(fetchSharpOdds(), 10000, undefined),
     cap(fetchStarterKBB(mlbGames.flatMap(g=>[g.homeSpId,g.awaySpId])), 10000, undefined),
     cap(fetchWeather(mlbGames), 10000, undefined),
     cap(fetchBullpen(), 10000, undefined),
+    cap(fetchKalshiF5(), 12000, []),
   ]);
   stepDone('s4');
 
@@ -2869,6 +2931,18 @@ async function init(){
       const d=Math.abs(et-gt); if(d<bd){ bd=d; best=ev; }
     }
     kalshiMap[g.gamePk]=best||cands[0];
+  }
+  // Match each game to its KXMLBF5 (first-5-innings) event the same way
+  const kalshiF5Map={};
+  for(const g of mlbGames){
+    const cands=(kalshiF5Events||[]).filter(ev=>
+      kalshiMktForTeam(ev.markets, g.homeName) && kalshiMktForTeam(ev.markets, g.awayName));
+    if(!cands.length) continue;
+    const gt=Date.parse(g.gameTime)||Date.now();
+    let best=null, bd=Infinity;
+    for(const ev of cands){ const et=kalshiEventTime(ev); if(et==null) continue;
+      const d=Math.abs(et-gt); if(d<bd){ bd=d; best=ev; } }
+    kalshiF5Map[g.gamePk]=best||cands[0];
   }
 
   // ── Render ───────────────────────────────────────────────────────────────────
@@ -2930,6 +3004,7 @@ async function init(){
       odds2:       allOdds2[idx]||null,
       predictor:   allPredictors[idx],
       kalshiEvent: kalshiMap[g.gamePk]||null,
+      kalshiF5Event: kalshiF5Map[g.gamePk]||null,
       injuries:    injuries,
     });
     container.appendChild(card);
@@ -3023,22 +3098,21 @@ function renderBestBets(container, hdr){
   const valuePlays = BEST_BETS.filter(b=>!b.totals).sort((a,b)=>b.roi-a.roi);
   const card=document.createElement('div');
   card.className='best-bets';
-  const roi=betsROIHtml('MLB');
+  const roi=betsROIHtml('MLBF5');
   if(!valuePlays.length){
-    card.innerHTML=`<div class="bb-title">&#x1F3AF; Today's Best Bets</div>
-      <div class="bb-empty">No pregame model edges vs the market today — the model agrees with Kalshi. Sit tight.</div>${roi}`;
+    card.innerHTML=`<div class="bb-title">&#x1F3AF; Today's Best Bets <span style="font-weight:400;opacity:.6;font-size:.62rem">First 5 Innings</span></div>
+      <div class="bb-empty">No F5 edges vs Kalshi today — the model agrees with the KXMLBF5 market. Sit tight.</div>${roi}`;
   }else{
     let rows='';
     for(const b of valuePlays.slice(0,6)){
-      const ck = b.booksAgree===true?' <span class="bb-ok">✓ books</span>':b.booksAgree===false?' <span class="bb-warn">⚠ books</span>':'';
       rows+=`<div class="bb-row"><span class="bb-mu">${b.matchup}</span>
-        <span class="bb-pick">${b.team} ML</span>
+        <span class="bb-pick">${b.pick||b.team}</span>
         <span class="bb-edge">+${(b.roi*100).toFixed(0)}% ROI</span>
-        <span class="bb-stake">${(b.stakeFrac*100).toFixed(1)}% bankroll</span>${ck}</div>`;
+        <span class="bb-stake">${(b.stakeFrac*100).toFixed(1)}% bankroll</span></div>`;
     }
-    card.innerHTML=`<div class="bb-title">&#x1F3AF; Today's Best Bets <span class="bb-count">${valuePlays.length}</span></div>
+    card.innerHTML=`<div class="bb-title">&#x1F3AF; Today's Best Bets <span class="bb-count">${valuePlays.length}</span> <span style="font-weight:400;opacity:.6;font-size:.62rem">First 5 Innings</span></div>
       ${rows}
-      <div class="bb-foot">Moneyline value only: model win prob beats the Kalshi price after fees (expected ROI shown above; realized ROI below). Not financial advice.</div>${roi}`;
+      <div class="bb-foot">First-5-innings value: model F5 prob beats the Kalshi KXMLBF5 ask after fees (expected ROI above; realized ROI below). F5 is starter-driven; backtested but a modest edge. Not financial advice.</div>${roi}`;
   }
   hdr.insertAdjacentElement('afterend', card);
 }
