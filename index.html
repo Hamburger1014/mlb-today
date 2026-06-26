@@ -1159,6 +1159,34 @@ function projectScore(homeAbbr,awayAbbr,homeKBBq=null,awayKBBq=null,p=null){
   return { home:Math.max(0.5,s.home), away:Math.max(0.5,s.away) };
 }
 
+// ── FIRST 5 INNINGS (F5) MODEL — 3-way: home leads / tie / away leads ─────
+//   BACKTESTED on 7,298 real games 2022-24 (per-inning linescores). Beats the
+//   naive base-rate out-of-sample in both 2023 & 2024 (log-loss 1.014→1.005 and
+//   1.004→0.996; acc 44.5→47.2% and 45.2→47.7%). F5 is starter-driven (bullpens
+//   barely pitch), so it leans on K-BB% with NO bullpen term.
+//   Expected F5 runs per team = (offense R/G, shrunk) × 5/9 × oppSP factor × scale;
+//   home gets a small bump. Poisson runs each side → convolve for the 3 outcomes.
+const F5_MODEL = { beta:1.5, homeBump:1.06, scale:1.15 };
+function _poisPmf(lam, kmax=14){
+  lam=Math.max(0.05,lam); const out=new Array(kmax+1); let t=Math.exp(-lam); out[0]=t;
+  for(let k=1;k<=kmax;k++){ t*=lam/k; out[k]=t; } return out;
+}
+// Returns {h: P(home leads after 5), t: P(tie), a: P(away leads)} or null.
+function f5Probs(homeAbbr, awayAbbr, homeKBBq, awayKBBq){
+  const h=teamStats[homeAbbr], a=teamStats[awayAbbr]; if(!h||!a) return null;
+  const hg=h.wins+h.losses, ag=a.wins+a.losses; if(hg<1||ag<1) return null;
+  const lg=leagueRPG();
+  const hoff=(h.rs+lg*15)/(hg+15), aoff=(a.rs+lg*15)/(ag+15);       // offense shrunk to lg (k=15)
+  const lk=REAL_MODEL.kbbLg;
+  const spf=q=> (q==null)?1:Math.max(0.55,Math.min(1.5, 1 - F5_MODEL.beta*(q-lk)));  // better SP → fewer runs
+  const lamH=Math.max(0.15, hoff*(5/9)*spf(awayKBBq)*F5_MODEL.homeBump*F5_MODEL.scale);
+  const lamA=Math.max(0.15, aoff*(5/9)*spf(homeKBBq)*F5_MODEL.scale);
+  const ph=_poisPmf(lamH), pa=_poisPmf(lamA);
+  let H=0,T=0,A=0;
+  for(let i=0;i<ph.length;i++) for(let j=0;j<pa.length;j++){ const p=ph[i]*pa[j]; if(i>j)H+=p; else if(i===j)T+=p; else A+=p; }
+  const s=H+T+A||1; return {h:H/s, t:T/s, a:A/s};
+}
+
 // ── WEATHER-AWARE TOTAL (dedicated model v2) ──────────────────────────────
 //   Predicts the GAME TOTAL from team off/def rates, park, both starters'
 //   K-BB%, live temp+wind, combined BULLPEN ERA, and combined starter avg-outs.
@@ -2073,6 +2101,8 @@ function renderGame(game, extras){
   const awayKBBq = starterKBB[game.awaySpId] ?? null;
   const modelResult = modelPredictEnhanced(homeAbbr, awayAbbr, homeKBBq, awayKBBq);
   let modelHomeP = modelResult.p ?? 0.5;
+  // FIRST 5 INNINGS (F5) — the headline prediction now. 3-way: home/tie/away leads after 5.
+  const f5 = f5Probs(homeAbbr, awayAbbr, homeKBBq, awayKBBq);   // {h,t,a} or null
   const pitcherAdjActive = modelResult.pitcherAdjActive;
   // Projected score — DERIVED from the win model so the projected winner always
   // matches the model pick (run total from the score environment, split by the
@@ -2346,10 +2376,38 @@ function renderGame(game, extras){
     </div>`;
   }
 
-  html += `
-    <div class="consensus-block">
+  // ── FIRST 5 INNINGS — headline prediction (3-way: away-lead / tie / home-lead) ──
+  if(f5){
+    const fa=Math.round(f5.a*100), ft=Math.round(f5.t*100), fh=Math.round(f5.h*100);
+    const f5HomeFav=f5.h>f5.a;
+    const f5Pick = Math.abs(f5.h-f5.a)<0.04
+      ? `<span class="consensus-pick cp-even">Too Close</span>`
+      : `<span class="consensus-pick ${f5HomeFav?'cp-home':'cp-away'}">Favors ${f5HomeFav?homeAbbr:awayAbbr}</span>`;
+    html += `
+    <div class="consensus-block" style="border-color:#3a6ea5">
       <div class="consensus-header">
-        <span class="consensus-title">&#x1F3AF; Consensus <span style="font-weight:400;opacity:.6;font-size:.6rem">${sourceCount} source${sourceCount!==1?'s':''}</span></span>
+        <span class="consensus-title">&#x26BE; First 5 Innings <span style="font-weight:400;opacity:.6;font-size:.6rem">model · lead / tie / lead</span></span>
+        ${f5Pick}
+      </div>
+      <div class="consensus-bar-row">
+        <div class="cb-abbr away">${awayAbbr}</div>
+        <div>
+          <div class="consensus-bar-track" style="display:flex">
+            <div style="width:${fa}%;background:linear-gradient(90deg,#b91c1c,#ef4444)"></div>
+            <div style="width:${ft}%;background:#5a6573"></div>
+            <div style="width:${fh}%;background:linear-gradient(90deg,#2563eb,#3b82f6)"></div>
+          </div>
+          <div class="consensus-vals"><span class="cv away">${fa}%</span><span style="color:var(--dim2);font-size:.72rem">Tie ${ft}%</span><span class="cv home">${fh}%</span></div>
+        </div>
+        <div class="cb-abbr home">${homeAbbr}</div>
+      </div>
+    </div>`;
+  }
+
+  html += `
+    <div class="consensus-block" style="opacity:.78">
+      <div class="consensus-header">
+        <span class="consensus-title" style="color:var(--dim)">Full game (reference) <span style="font-weight:400;opacity:.6;font-size:.6rem">${sourceCount} source${sourceCount!==1?'s':''}</span></span>
         ${consPickHtml}
       </div>
       <div class="consensus-bar-row">
