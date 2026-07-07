@@ -8,7 +8,7 @@
     :root {
       --bg:#07131f; --card:#0f2035; --card2:#152a40; --card3:#1a3050;
       --border:#1e3a55; --border2:#254a6a;
-      --text:#dce9f5; --dim:#7a99b5; --dim2:#4a6a85;
+      --text:#dce9f5; --dim:#7a99b5; --dim2:#6f8fab;
       --gold:#e8c84b; --green:#22c55e; --red:#e8174d;
       --blue:#3a8ae8; --blue2:#1a5fbd; --purple:#a855f7;
       --orange:#f97316; --teal:#14b8a6;
@@ -387,13 +387,20 @@
       .tr-kpi{flex:1;min-width:0}
       .tr-big{font-size:1.2rem}
     }
+
+    /* keyboard focus ring for the click-to-expand controls */
+    .card-header:focus-visible,.edge-row:focus-visible{outline:2px solid var(--blue);outline-offset:-2px;border-radius:8px}
+
+    @media (prefers-reduced-motion: reduce){
+      *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}
+    }
   </style>
 </head>
 <body>
 
 <header>
   <div class="hdr-left">
-    <button id="hamburger" aria-label="Menu" onclick="toggleMenu()">☰</button>
+    <button id="hamburger" aria-label="Menu" aria-expanded="false" aria-controls="nav-menu" onclick="toggleMenu()">☰</button>
     <div class="hdr-logo" id="hdr-logo">⚾</div>
     <div>
       <div class="hdr-title" id="hdr-title">MLB Today</div>
@@ -409,14 +416,14 @@
 
 <!-- Slide-out navigation -->
 <div id="nav-overlay" onclick="toggleMenu()"></div>
-<nav id="nav-menu">
+<nav id="nav-menu" inert aria-label="Sections">
   <div class="nav-head">Sections</div>
   <button class="nav-item active" data-view="mlb" onclick="switchView('mlb')">⚾ MLB Today</button>
   <button class="nav-item" data-view="wc" onclick="switchView('wc')">⚽ World Cup 2026</button>
 </nav>
 
 <div class="legend">
-  <div class="legend-item"><div class="dot" style="background:#3a8ae8"></div>Our Model (Pythagorean)</div>
+  <div class="legend-item"><div class="dot" style="background:#3a8ae8"></div>Our Model (logistic)</div>
   <div class="legend-item"><div class="dot" style="background:#fbbf24"></div>Vegas Line (DK/FD)</div>
   <div class="legend-item"><div class="dot" style="background:#34d399"></div>ESPN Predictor</div>
   <div class="legend-item"><div class="dot" style="background:#a855f7"></div>Kalshi Market</div>
@@ -429,7 +436,7 @@
 <div id="nn-stats-bar" style="font-size:.73rem;color:var(--dim);padding:5px 24px;background:#070f1c;border-bottom:1px solid var(--border);text-align:center;cursor:pointer" title="Click to show/hide the live track record">&#x1F9E0; Real-Data Model · Loading…</div>
 <div id="track-record" style="display:none"></div>
 <main>
-  <div id="status-banner">
+  <div id="status-banner" role="status" aria-live="polite">
     <div class="spinner"></div>
     <div class="status-steps" id="status-steps">
       <div class="status-step active" id="s1">Loading MLB standings & stats…</div>
@@ -448,7 +455,7 @@
   <div id="wc-stats-bar" style="font-size:.73rem;color:var(--dim);padding:5px 24px;background:#070f1c;border-bottom:1px solid var(--border);text-align:center;cursor:pointer" title="Click to show/hide the World Cup track record">&#x26BD; World Cup model · Loading…</div>
   <div id="wc-track-record" style="display:none"></div>
   <main>
-    <div id="wc-status" style="text-align:center;padding:30px;color:var(--dim)">Loading World Cup matches…</div>
+    <div id="wc-status" role="status" aria-live="polite" style="text-align:center;padding:30px;color:var(--dim)">Loading World Cup matches…</div>
     <div id="wc-container" style="display:none;flex-direction:column;gap:12px"></div>
   </main>
 </div>
@@ -459,14 +466,11 @@
 // ═══════════════════════════════════════════════════════════════
 //  CONFIG
 // ═══════════════════════════════════════════════════════════════
-// Kalshi now uses RSA-PSS signed requests (no more Bearer tokens).
-// KALSHI_KEY_ID  = the Key ID shown on kalshi.com/account/profile → API Keys
-// KALSHI_PRIVATE_KEY_PEM = paste your full RSA private key PEM here
-//   (begins with -----BEGIN RSA PRIVATE KEY----- or -----BEGIN PRIVATE KEY-----)
-//   Leave empty to use unauthenticated public access only.
-const KALSHI_KEY_ID = '';
-const KALSHI_PRIVATE_KEY_PEM = '';
-
+// NOTE: Kalshi market data is fully PUBLIC and this app only ever READS it via
+// the Cloudflare Worker proxy (kalshiPublicFetch). The old in-page RSA private-
+// key signing path was removed on purpose: a tradeable-account private key must
+// never live in client-side JS / a deployed file. If authenticated calls are
+// ever needed, sign them server-side inside the Worker, not here.
 const KALSHI_BASE = 'https://api.elections.kalshi.com/trade-api/v2';
 // Your own Cloudflare Worker proxy (Kalshi blocks direct browser calls).
 // Deploy kalshi-proxy-worker.js, then paste its URL here e.g. 'https://mlb-kalshi.<you>.workers.dev'
@@ -482,8 +486,15 @@ const MLB_LOGO    = id => `https://www.mlbstatic.com/team-logos/${id}.svg`;
 // ═══════════════════════════════════════════════════════════════
 let ACTIVE_VIEW='mlb', wcLoaded=false;
 function toggleMenu(){
-  document.getElementById('nav-menu').classList.toggle('open');
-  document.getElementById('nav-overlay').classList.toggle('open');
+  const menu=document.getElementById('nav-menu'), overlay=document.getElementById('nav-overlay'), burger=document.getElementById('hamburger');
+  const open=!menu.classList.contains('open');
+  menu.classList.toggle('open', open);
+  overlay.classList.toggle('open', open);
+  if(burger) burger.setAttribute('aria-expanded', open?'true':'false');
+  // Keyboard a11y: keep the off-screen menu out of the tab order / screen readers
+  // when closed (`inert`); on open, focus the first item; on close, return focus.
+  if(open){ menu.removeAttribute('inert'); const first=menu.querySelector('.nav-item'); if(first) first.focus(); }
+  else { menu.setAttribute('inert',''); if(burger) burger.focus(); }
 }
 function switchView(v){
   ACTIVE_VIEW=v;
@@ -493,7 +504,8 @@ function switchView(v){
   document.getElementById('hdr-title').textContent  = v==='wc'?'World Cup 2026':'MLB Today';
   document.querySelectorAll('.nav-item').forEach(b=>b.classList.toggle('active',b.dataset.view===v));
   toggleMenu();
-  if(v==='wc' && !wcLoaded){ wcLoaded=true; loadWorldCup(); }
+  if(v==='wc'){ stopLiveScorePolling(); if(!wcLoaded){ wcLoaded=true; loadWorldCup(); } }
+  else if(v==='mlb' && !_liveTimer && document.querySelector('#games-container .game-card')) startLiveScorePolling();
 }
 function refreshActiveView(){ ACTIVE_VIEW==='wc' ? loadWorldCup() : init(); }
 
@@ -585,11 +597,14 @@ async function fetchWCKalshi(){
   // match markets, so a single request gets the whole tournament in ~0.5s.
   // Paginating (6 calls + retries) multiplied rate-limit pressure on the proxy
   // and timed out → Kalshi showed "Not available"; one call is fast + reliable.
+  const _wcFresh=_kCacheGet('kxwcgame',75000);
+  if(_wcFresh) return new Map(_wcFresh);
   let d=null;
-  for(let i=0;i<3 && !d;i++){
+  for(let i=0;i<2 && !d;i++){   // gentle retry (was 3 — rapid retries worsened the proxy rate-limit)
     try{ d=await kalshiPublicFetch(`/markets?series_ticker=KXWCGAME&status=open&min_close_ts=${now}&limit=1000`); }
-    catch(e){ d=null; if(i<2) await new Promise(r=>setTimeout(r,600*(i+1))); }
+    catch(e){ d=null; if(i<1) await new Promise(r=>setTimeout(r,700)); }
   }
+  if(!d){ const st=_kCacheGetStale('kxwcgame'); if(st) return new Map(st); }
   if(d) all.push(...(d.markets||[]));
   const byEv={};
   for(const m of all){ if(m.event_ticker) (byEv[m.event_ticker]=byEv[m.event_ticker]||[]).push(m); }
@@ -608,6 +623,7 @@ async function fetchWCKalshi(){
     rec.byTeam[names[0]]=teams[names[0]]/t; rec.byTeam[names[1]]=teams[names[1]]/t;
     map.set([names[0],names[1]].sort().join('|'), rec);
   }
+  if(map.size) _kCacheSet('kxwcgame', Array.from(map.entries()));
   return map;
 }
 // World Cup value play: best +EV outcome for one match vs the Kalshi ASK price,
@@ -644,7 +660,16 @@ function wcEvaluate(cons, vegas, kal, hAbbr, aAbbr){
 // ROI = Σ net profit / Σ risked. Fee = Kalshi's ≈0.07·p·(1−p). Honest forward test.
 const BETS_LOG_KEY='bets_log_v1';
 let betsLog=(()=>{try{return JSON.parse(localStorage.getItem(BETS_LOG_KEY)||'{}')||{};}catch(e){return {};}})();
-function _betsSave(){ try{localStorage.setItem(BETS_LOG_KEY,JSON.stringify(betsLog));}catch(e){} }
+function _betsSave(){
+  try{localStorage.setItem(BETS_LOG_KEY,JSON.stringify(betsLog));}
+  catch(e){
+    // Quota hit — evict SETTLED bets older than 60 days and retry once, so the
+    // ledger can't grow unbounded and silently stop persisting new results.
+    const cut=new Date(Date.now()-60*864e5).toISOString().slice(0,10);
+    for(const id in betsLog){ const b=betsLog[id]; if(b && b.result!=null && b.date && b.date<cut) delete betsLog[id]; }
+    try{localStorage.setItem(BETS_LOG_KEY,JSON.stringify(betsLog));}catch(e2){}
+  }
+}
 function logBet(id, rec){ if(id && rec && !betsLog[id] && rec.price>0.01 && rec.price<0.99){ betsLog[id]={...rec, result:null}; _betsSave(); } }
 function gradeBet(id, win){ const b=betsLog[id]; if(b && b.result==null){ b.result=win?'W':'L'; _betsSave(); } }
 function betsROI(league){
@@ -706,6 +731,40 @@ function wcStatText(){
   for(const e of g){const pr=[e.pH,e.pD,e.pA],o=idx[e.res]; if(pr.indexOf(Math.max(...pr))===o)acc++; ll+=-Math.log(Math.max(1e-6,pr[o]));}
   return `&#x26BD; World Cup model · ${g.length} graded · ${Math.round(acc/g.length*100)}% outcomes called · log-loss ${(ll/g.length).toFixed(3)} <span style="color:var(--dim2)">· click for track record</span>`;
 }
+// WC model calibration — pooled 3-way reliability (predicted P vs observed
+// frequency). Each graded match contributes 3 points (its win/draw/loss probs),
+// so it firms up ~3× faster than accuracy alone.
+function _wcCalib(){
+  const g=(typeof wcGraded==='function')?wcGraded():[];
+  if(!g.length) return null;
+  const pts=[];
+  for(const e of g){ pts.push({p:e.pH,hit:e.res==='H'?1:0},{p:e.pD,hit:e.res==='D'?1:0},{p:e.pA,hit:e.res==='A'?1:0}); }
+  const edges=[0,0.1,0.2,0.3,0.4,0.55,1.001];
+  const buckets=[];
+  for(let i=0;i<edges.length-1;i++){ const lo=edges[i],hi=edges[i+1];
+    const inB=pts.filter(x=>x.p>=lo&&x.p<hi);
+    if(!inB.length){ buckets.push({lo,hi,n:0,conf:(lo+hi)/2,acc:null}); continue; }
+    const conf=inB.reduce((s,x)=>s+x.p,0)/inB.length, acc=inB.reduce((s,x)=>s+x.hit,0)/inB.length;
+    buckets.push({lo,hi,n:inB.length,conf,acc});
+  }
+  const N=pts.length; let ece=0,brier=0;
+  for(const b of buckets){ if(b.n) ece+=(b.n/N)*Math.abs(b.conf-b.acc); }
+  for(const x of pts){ brier+=Math.pow(x.p-x.hit,2); }
+  return {buckets, N, matches:g.length, ece, brier:N?brier/N:0};
+}
+function renderWCCalibrationPanel(){
+  const c=_wcCalib();
+  if(!c || !c.N) return '';
+  return `<div class="tr-wrap">
+    <div class="tr-head">&#x1F3AF; WC model calibration <span class="tr-sub">${c.matches} graded matches · are the win / draw / loss probabilities honest?</span></div>
+    <div class="tr-kpis">
+      <div class="tr-kpi"><div class="tr-big ${c.ece<=0.06?'tr-good':''}">${(c.ece*100).toFixed(1)}%</div><div class="tr-lbl">Calibration error (ECE · lower better)</div></div>
+      <div class="tr-kpi"><div class="tr-big">${c.brier.toFixed(3)}</div><div class="tr-lbl">Brier score (lower better)</div></div>
+    </div>
+    ${renderCalibrationSVG(c,{x0:0,x1:1,y0:0,y1:1,ticks:[0,0.25,0.5,0.75,1],xlab:'Predicted probability',ylab:'Observed frequency'})}
+    <div class="tr-foot">Every match contributes its win / draw / loss probabilities (3 points): x = predicted probability, y = how often that outcome actually happened. On the dashed line = calibrated. Small samples are noisy — this firms up as the tournament progresses.</div>
+  </div>`;
+}
 function buildWCTrackRecord(){
   const el=document.getElementById('wc-track-record'); if(!el) return;
   const g=wcGraded();
@@ -733,7 +792,7 @@ function buildWCTrackRecord(){
     </div>
     <div class="tr-tiers">${rows}</div>
     <div class="tr-foot">Pick = model's most likely of win / draw / win. Backtest baseline: log-loss ~0.86, ~60% favorites. Sample grows each match day — this is the honest forward test of the model.</div>
-  </div>`;
+  </div>`+renderWCCalibrationPanel();
 }
 async function loadWorldCup(){
   const status=document.getElementById('wc-status'), cont=document.getElementById('wc-container');
@@ -748,7 +807,7 @@ async function loadWorldCup(){
     // add to the wall-clock; never throws.
     const kalshiPromise = fetchWCKalshi().catch(()=>new Map());
     const results=await Promise.all(days.map(dt=>
-      fetch(`${WC_ESPN}/scoreboard?dates=${dt}`).then(r=>r.ok?r.json():null).catch(()=>null)));
+      espnFetch(`${WC_ESPN}/scoreboard?dates=${dt}`).catch(()=>null)));   // retrying fetch — a throttled day retries instead of silently dropping its matches
     for(const d of results){ for(const e of (d&&d.events||[])){ if(!seen.has(e.id)){ seen.add(e.id); events.push(e); } } }
     events.sort((a,b)=> new Date(a.date)-new Date(b.date));
     if(!events.length){ status.textContent='No World Cup matches in the next several days.'; return; }
@@ -834,7 +893,7 @@ async function loadWorldCup(){
         const consensusBlock=`
         <div class="consensus-block">
           <div class="consensus-header">
-            <span class="consensus-title">&#x1F3AF; Consensus <span style="font-weight:400;opacity:.6;font-size:.6rem">${srcN} source${srcN!==1?'s':''} · W/D/W</span></span>
+            <span class="consensus-title">&#x1F3AF; Consensus <span style="font-weight:400;opacity:.6;font-size:.6rem">${srcN===1?'Elo only — no market · W/D/W':srcN+' sources · W/D/W'}</span></span>
             ${pickHtml}
           </div>
           <div class="consensus-bar-row">
@@ -862,7 +921,7 @@ async function loadWorldCup(){
         const footerRow = (ouHtml||kLink)?`<div class="edge-row" style="cursor:default"><div class="edge-left">${ouHtml}</div>${kLink}</div>`:'';
         predBlock = consensusBlock + sourcesPanel + footerRow;
       } else {
-        predBlock=`<div class="consensus-block"><div class="wc-pick" style="color:var(--dim2)">No Elo rating for ${hr==null?hn:an} — prediction unavailable</div></div>`;
+        predBlock=`<div class="consensus-block"><div class="wc-pick" style="color:var(--dim2)">No Elo rating for ${esc(hr==null?hn:an)} — prediction unavailable</div></div>`;
       }
 
       html+=`<div class="game-card">
@@ -873,7 +932,7 @@ async function loadWorldCup(){
               <span class="team-name">${aAbbr}</span>
               ${aScoreHtml}
             </div>
-            <span class="team-record">${an}${ar!=null?' &middot; '+ar:''}</span>
+            <span class="team-record">${esc(an)}${ar!=null?' &middot; '+ar:''}</span>
           </div>
           <div class="game-center">${centerHtml}</div>
           <div class="team-side home">
@@ -882,7 +941,7 @@ async function loadWorldCup(){
               <span class="team-name">${hAbbr}</span>
               ${hImg?`<img class="team-logo" src="${hImg}" alt="" onerror="this.style.display='none'"/>`:''}
             </div>
-            <span class="team-record">${hn}${hr!=null?' &middot; '+hr:''}</span>
+            <span class="team-record">${esc(hn)}${hr!=null?' &middot; '+hr:''}</span>
           </div>
         </div>
         ${predBlock}
@@ -962,13 +1021,8 @@ let teamById  = {};
 let teamStats = {};
 
 // ═══════════════════════════════════════════════════════════════
-//  NEURAL NETWORK PREDICTION MODEL
-//  Architecture: 10 features → Dense(16,relu) → Dense(12,relu)
-//                             → Dense(8,relu)  → Dense(1,sigmoid)
-//  Trained on 80K synthetic games (2020–2024 MLB distributions)
-//  Platt-scaling calibration adapts from logged game results
-//  Features: Pythagorean Δ, Win% Δ, Home/Away Δ, Run-diff Δ,
-//            ERA Δ, SP quality Δ, Park factor, OPS Δ, Streak Δ
+//  SHARED MODEL CONSTANTS  (used by the live logistic model below)
+//  LG_AVG_ERA + PARK_FACTORS feed the projected-score and totals models.
 // ═══════════════════════════════════════════════════════════════
 
 // ── MLB league-average ERA baseline ──────────────────────────────
@@ -986,7 +1040,7 @@ const PARK_FACTORS = {
   SF:0.96, SD:0.95, TB:0.97, KC:0.99, AZ:0.97, WAS:0.98,
 };
 
-// ── Pre-trained neural network weights ───────────────────────────
+// ── Legacy synthetic-NN weights — UNUSED inert data (live model = REAL_MODEL) ──
 const NN_MODEL = {"scaler_mean":[0.03010874706902045,0.02518917929428409,0.019950125195184795,0.05659315170220584,0.002403720625678591,-0.0013883797365104786,0.009978250000003611,0.001874893593077154,0.0007608064636801793,1.0],"scaler_scale":[0.09011290443300032,0.0948117620159536,0.0799679520591644,0.5502643280911019,0.6013239660705584,0.1801460450297706,0.0501239416540251,0.04006505901376541,0.299678727236544,1.0],"feature_names":["pythDiff","winPctDiff","homeAwayDiff","rdDiff","eraDiff","spLogitDiff","parkFactor","opsDiff","streakDiff","homeAdv"],"layers":[{"weights":[[-0.18381355656693282,0.4789256154753548,0.2130096020218239,0.37836124058265125,-0.2832662122615264,-0.19842604791198504,-0.49807454791838024,0.4913933050872451,0.015703094455932435,0.10179935387141575,-0.7090750405578788,0.47144330378255256,0.4720127287429044,-0.30774145758728694,-0.19709344529286288,-0.2565141592914611],[-0.19112039188100358,0.25392160155853255,-0.01396877968302409,-0.07908284557614804,0.005539185543851755,-0.21471582460167657,-0.15662604096468924,-0.002024695417543577,-0.09920126823583958,0.2339177295594901,-0.17019006092116332,0.22068607654273628,0.07690768074109007,-0.3307556203577021,0.10861559439220493,-0.3734957273251862],[-0.3453718316699284,0.3553579399489114,0.3472672497522552,0.31999143719872664,-0.0585922475332991,-0.35915875752619525,0.1611294403875986,-0.1755786781422722,-0.25887359071370075,-0.07961169722730106,-0.1896174723569195,0.365368241821065,-0.24035734517691318,0.2047046262562991,-0.023125195466210276,-0.005311868088830607],[0.07373316304850419,-0.06300643508095773,0.5406358284515407,0.21489072031478415,0.6222666828968457,0.435209976660204,-0.038771392480921874,0.35030566526063084,-0.19417637238333005,-0.26758424126790303,-0.422678694365925,-0.16465365683184643,-0.01886421291706775,-0.18476850615248158,0.3236094946604753,-0.13514937667717708],[-0.3381902838298142,0.1031731575343046,-0.21440981335257278,0.36120242660238183,-0.4419928805520149,0.48289168846259695,0.1265742612798368,-0.15505619771564239,-0.5430796691038929,0.35825000779230143,-0.027999789550920782,0.2511107177671575,0.39250379976970384,-0.48866066537047237,-0.04204115547374381,-0.3137587558540658],[0.29122586388777316,0.1700607286465152,0.059332520838558694,-0.4072549283889764,-0.22383452881772553,-0.23014283961544402,0.2807602416077626,0.21390571582366436,0.3255117552277357,-0.15384976497180017,-0.48745831991539573,0.2635790577132324,0.1728332203030262,-0.08850434208716038,0.2165019636727982,0.059056793268483745],[0.059915022518473054,0.07837497714553224,-0.4930665098823898,-0.36398054057404383,-0.2332227001076666,0.15165003814916966,-0.14980834498926526,0.05721422293789008,0.4449182954946255,-0.11354484227014978,-0.033524352741301326,0.10824571166250013,-0.05293462224006978,-0.3288676996142034,-0.11470027613271518,-0.24954705529167168],[0.482819115370505,0.3234549625793464,0.2627852416334994,0.3075356739800511,0.1976637008467538,-0.1609088188740858,0.22129140483811405,0.07159019241233124,0.29599702828726565,0.40682558609037733,-0.24332569881802876,-0.15046630333562536,-0.2331799263863493,0.18301754224634914,0.4428594592540675,0.32023875074257113],[-0.3745763034133434,-0.0013564590685984283,-0.07683719372134123,-0.1917748673577619,-0.4337627421915169,-0.18075168958869445,0.29035658347756177,-0.1941756832832603,0.05132299616516929,0.07791805172912639,0.13124088210618942,0.3862288194684886,0.3788769646455296,-0.3063527924550415,0.04800361542779549,-0.18152063479940347],[2.1436471006702464e-49,-8.6325787409265e-16,9.576873734612066e-66,-8.753331596683974e-75,-1.1796689890968715e-16,-3.782316878411551e-48,1.3861224864675208e-19,-2.4439309247279457e-41,-5.208573487776158e-26,-2.887359820532369e-73,1.3157182189484282e-14,-2.7775672687694166e-42,-1.7740261621991228e-56,4.003515019173149e-41,-4.87788999303006e-41,-5.796083373984569e-47]],"biases":[-0.11315347830902966,0.22058276248029043,0.06681057164454171,-0.0039704585487229825,-0.3099405815118914,0.49223689761100464,-0.24143859055317138,-0.03184361783008666,-0.4948237823004292,-0.03403452368216027,0.2614768957459386,-0.5120075712290176,0.12543697311933447,-0.23701467018160022,0.17827169071665883,-0.2550640016250533],"activation":"relu"},{"weights":[[0.14092640528991252,-0.012342186182595012,0.275752984483522,-0.46374473317307957,-0.3245636912760814,-0.36796038792765756,0.4058364654364998,0.33719125141325257,-0.2775909508896987,0.10052532632752213,0.3056050581965082,0.0803938063029822],[0.035206551085060656,-0.12357910337248482,-0.41105755296711405,0.3310005886277129,0.3286300910671545,0.18612362858254528,-0.10441506680488863,-0.08692047739920428,0.1297724788484972,0.5005779161260464,0.3914996671404045,0.251236788748421],[0.2151379864239883,-0.49071776232975456,-0.3636040838290566,0.4239390833150295,0.08152946815220702,-0.4509354977532272,-0.20194151324330703,0.10948889378555128,-0.48745638541576664,-0.023450968227009723,0.10340458722277636,0.21304386372512443],[0.014775819221880428,-0.17710206947515772,0.2740993009204015,-0.3056619376533681,-0.12270767296367277,0.24992540501517083,0.26005241893671216,0.29420270856975134,0.09043078768493201,0.08495781832751258,-0.33074970959898076,-0.09650382667883917],[-0.19428907409846313,-0.18079471842262387,0.4157921196168974,0.09181432444023745,0.2743909245616219,-0.02048630930090743,0.347999814169942,-0.06958344333088803,0.05499318503767286,0.03736746550421487,-0.31688856190350156,0.18028647026180655],[-0.12730092349178732,-0.33545318810770014,0.15485049732226275,-0.2066602704858403,0.3193778477567512,0.36624935939927483,0.41318296869595666,-0.08278103737607842,-0.6123426074258007,0.2007158093736669,-0.17181097339382254,0.444212623125109],[0.5303605369669129,0.5645252486395996,-0.24829118520098506,0.0919306380477012,0.20696836035070698,-0.1023344511117746,-0.05386294244461502,-0.014092894443589821,0.3164676830153095,0.16860113558445813,0.049688976765393494,-0.23617843165936156],[0.027567985405847317,0.47995197647015125,-0.2637705887049758,0.047236174282104144,0.4278129694845503,0.2327558917800543,0.15504507156008418,0.23012867350574098,-0.08216480515523104,-0.14893124928773735,0.24463153287341582,0.29759321509522746],[0.3035968505069173,0.3666035452471409,-0.09250273972940343,-0.12688672896472183,0.1683281389237657,0.15573444690013596,0.17751089601987008,0.31832792976039953,0.29288791880306453,-0.30181377410508853,-0.09001531717822416,-0.4017663438203774],[0.11900318113169736,-0.5053653031703182,-0.11522937130528031,-0.006733995522952703,-0.2949048976461366,0.1739667251399177,-0.22305573609911053,-0.5240986116200927,0.12376960159223147,-0.22691322690345625,-0.28316903870715654,0.010564171099769096],[0.2712705725955363,-0.3296674062611462,0.03308254264731919,-0.3573161885615363,-0.4991070564227639,-0.17626921490046524,0.24284235412535626,0.021794416108197073,0.2794451335272111,0.3331755185984251,-0.09013732816709334,-0.2779263510753113],[0.21018937076427052,-0.36817283470690954,-0.020718833393903208,-0.3231944878341629,-0.6204850656116706,0.41162193442717754,0.2416083305449921,0.2212207082122889,0.009094873058970762,-0.045504893801956936,-0.28492834761313973,-0.14258096836904852],[0.054042838539052396,0.04203335434154673,0.18602694674718498,-0.10416109005502863,0.5369620894935436,0.14430697101218104,0.11727684381995392,0.14281026279728498,-0.07539819528196008,-0.491640120620716,0.07185583960220186,0.24928914695150506],[-0.42418891194014036,-0.3578876242715613,-0.5323978292307108,-0.6145191562168714,0.20871491157665906,0.05947185741960576,-0.02468199713386989,-0.4276886342631633,0.00840144559248946,0.0825495958014449,-0.26419341498345267,-0.06704506910089274],[-0.10904670646861721,0.22682103126482575,0.04756378117574508,-0.28227803901277626,-0.18010981615387683,0.13533361959397083,0.1208769853622756,0.2769683167525816,-0.004752555652923841,-0.2020274944194304,-0.3302126953613308,0.1910301086803773],[-0.3814897993583854,0.09447886446865855,0.21401502050985757,0.028089706814656806,-0.18591756321433792,0.02405548693508974,0.0031112096527919114,-0.017127578535194827,0.44296156790353547,-0.019669196309271796,0.387729054314917,0.35213636765363443]],"biases":[-0.2060535585049759,-0.3727393953394121,-0.4147752606320981,-0.3888205670509854,-0.4146794197800854,0.2466853604047024,-0.31921157717527404,-0.11256853117179952,0.17788995768673477,-0.5333607757659025,0.42861100471874564,-0.1046518551187011],"activation":"relu"},{"weights":[[-0.23048861427811884,0.1629065531898642,0.19506453526440473,0.4294741166498201,0.2407471630507762,0.3423525131296563,-0.24752311839921673,-0.32339517915199456],[0.16871174058489757,0.4311304173162281,0.4437985321505309,-0.3466460069106431,-0.07926042550789497,0.41375802749057705,0.022763252169175012,0.565186276677951],[0.3831922879603352,-0.04330743277357465,0.19919515309124353,0.24739690182959057,-0.28975154746224896,0.4703753711562917,0.004350381526599053,0.38874994290422277],[-0.018965647706924334,0.47204048049380626,-0.27025833134816724,-0.5710682570959057,0.4913198679510226,-0.39362674620302507,0.011203417666230508,0.5174084865584381],[0.4300431751087024,0.09339690049616742,0.3125370743691436,-0.09250952264690072,-0.3559446030601087,-0.1758183795484956,0.22222862770867893,0.27969164565374144],[0.29799111549880297,0.33486922187540014,-0.4928065061661098,-0.061275889410024834,-0.3368198015060306,0.11884794788794112,-0.11214883515173525,0.4469937168145274],[-0.20076903704973728,-0.48976393574414645,-0.27782236149993966,0.33123674391906804,0.08023783814872379,-0.3686764563586565,-0.24791760711144517,0.16557305301402764],[-0.394130422396156,0.31380198902096096,0.23449713749640744,-0.467185172455346,-0.41760391447545614,0.4848754426033165,-0.12851741442189973,-0.15753127937235403],[0.3488241027437896,0.502902923704099,0.5309502008431908,0.2670270599932536,-0.06400587258277321,-0.3185068655143208,0.253365992764026,0.13356426565524768],[-0.14681282790667485,0.1810270212471242,-0.06686523679502775,0.27644669031897706,-0.6137628593299005,-0.14341545804437356,0.005660071515835614,-0.6319266079869593],[-0.40232974052866766,0.19720088197913513,0.23293696154024834,0.023677016161383395,0.555642978808907,-0.04996589115327754,-0.2606113151356599,0.4534315845753886],[-0.3654450240614303,0.46134111150151014,-0.5857435041537308,0.5517624826127049,-0.47756858136572045,0.3998778530449632,0.05828582729479026,0.49540285298029785]],"biases":[-0.47981375990961345,0.08240380738325233,0.40296797003918877,-0.039962666228564356,0.3070836364703605,0.35014732247582286,-0.11618294834725865,0.2090555817595538],"activation":"relu"},{"weights":[[0.15571165040172572],[0.6332273636119184],[-0.6546057512567344],[-0.3858062511129565],[0.8240131906079518],[0.6126231386903852],[-0.04711675039752148],[0.2542596008984328]],"biases":[-0.3195015460186234],"activation":"sigmoid"}]};
 
 // ── Platt scaling calibration (online-learned from logged results)
@@ -1004,58 +1058,15 @@ function pythagorean(rs,ra){ if(!rs||!ra||rs<=0||ra<=0) return 0.5; const e=1.83
 function shrink(val,n,prior=0.5,k=20){ return (val*n+prior*k)/(n+k); }
 function parseStreak(s){ if(!s) return 0; const m=s.match(/([WL])\s*(\d+)/i); if(!m) return 0; return m[1].toUpperCase()==='W'?Math.min(+m[2],8)/8:-Math.min(+m[2],8)/8; }
 
-// ── Neural network forward pass ──────────────────────────────────
-function nnForward(rawFeatures){
-  const mn=NN_MODEL.scaler_mean, sc=NN_MODEL.scaler_scale;
-  let x=rawFeatures.map((v,i)=>(v-mn[i])/sc[i]);
-  for(const layer of NN_MODEL.layers){
-    const {weights:W,biases:B,activation:act}=layer;
-    x=B.map((b,j)=>{
-      let s=b; for(let i=0;i<x.length;i++) s+=x[i]*W[i][j];
-      return act==='relu'?Math.max(0,s):1/(1+Math.exp(-Math.max(-20,Math.min(20,s))));
-    });
-  }
-  return x[0];
-}
+// (Legacy synthetic-NN forward pass removed — live model is the logistic REAL_MODEL.)
 
 // ── Platt-scaled output (adapts as results are logged) ───────────
 function plattScale(rawP){
   return sigmoid(NN_PLATT.a*logit(rawP)+NN_PLATT.b);
 }
 
-// ── SP ERA quality logit ─────────────────────────────────────────
-function _spEraLogit(spEra,teamEra){
-  if(spEra==null||isNaN(spEra)) return 0;
-  const baseline=(teamEra>0)?teamEra:LG_AVG_ERA;
-  return (baseline-Math.max(1.50,Math.min(8.50,spEra)))*0.09;
-}
-
-// ── Build 10-feature vector ──────────────────────────────────────
-function buildFeatures(homeAbbr,awayAbbr,homeSPERA=null,awaySPERA=null){
-  const h=teamStats[homeAbbr],a=teamStats[awayAbbr];
-  if(!h||!a) return null;
-  const hg=h.wins+h.losses, ag=a.wins+a.losses;
-  const hPs=shrink(pythagorean(h.rs,h.ra),hg), aPs=shrink(pythagorean(a.rs,a.ra),ag);
-  const hWs=shrink(hg>0?h.wins/hg:0.5,hg), aWs=shrink(ag>0?a.wins/ag:0.5,ag);
-  const hHgp=(h.homeWins||0)+(h.homeLosses||0);
-  const hHws=shrink(hHgp>0?(h.homeWins||0)/hHgp:0.5,hHgp);
-  const aAw=Math.max(0,(a.wins||0)-(a.homeWins||0));
-  const aAgp=Math.max(0,ag-((a.homeWins||0)+(a.homeLosses||0)));
-  const aAws=shrink(aAgp>0?aAw/aAgp:0.5,aAgp);
-  const hRd=hg>0?(h.rs-h.ra)/hg:0, aRd=ag>0?(a.rs-a.ra)/ag:0;
-  return [
-    hPs-aPs,                                    // 0 pythDiff
-    hWs-aWs,                                    // 1 winPctDiff
-    hHws-aAws,                                  // 2 homeAwayDiff
-    hRd-aRd,                                    // 3 rdDiff
-    (a.era||LG_AVG_ERA)-(h.era||LG_AVG_ERA),    // 4 eraDiff (+ = home better)
-    _spEraLogit(homeSPERA,h.era)-_spEraLogit(awaySPERA,a.era), // 5 spLogitDiff
-    (PARK_FACTORS[homeAbbr]||1.0)-1.0,          // 6 parkFactor (centered)
-    (h.ops||0)-(a.ops||0),                      // 7 opsDiff
-    parseStreak(h.streak||'')-parseStreak(a.streak||''), // 8 streakDiff
-    1.0,                                        // 9 homeAdv (constant)
-  ];
-}
+// (Legacy _spEraLogit()/buildFeatures() removed — superseded by the K-BB%
+//  logistic REAL_MODEL. PARK_FACTORS/LG_AVG_ERA remain for the score/totals models.)
 
 // ═══════════════════════════════════════════════════════════════
 //  REAL-DATA MODEL  (replaces the synthetic-trained neural net)
@@ -1249,7 +1260,11 @@ async function fetchWeather(mlbGames){
       const hh=d.hourly, t=g.gameTime? new Date(g.gameTime):new Date();
       const key=t.toISOString().slice(0,13)+':00';
       let i=hh.time.indexOf(key); if(i<0) i=hh.time.findIndex(x=>x>=key); if(i<0) i=0;
-      gameWeather[g.gamePk]={t:Math.round(hh.temperature_2m[i]), w:Math.round(hh.wind_speed_10m[i])};
+      const _t=hh.temperature_2m[i], _w=hh.wind_speed_10m[i];
+      // Guard against null/NaN hourly readings — an unchecked NaN propagates into
+      // totalModel and renders "NaN" projected totals. Skip → neutral fallback.
+      if(Number.isFinite(_t) && Number.isFinite(_w))
+        gameWeather[g.gamePk]={t:Math.round(_t), w:Math.round(_w)};
     }catch(e){}
   }));
 }
@@ -1263,13 +1278,18 @@ async function fetchStarterKBB(pitcherIds){
     try{
       const pj=await mlbFetch(`/people?personIds=${ids.slice(i,i+100).join(',')}&hydrate=stats(group=[pitching],type=[season],season=${SEASON})`);
       for(const p of (pj.people||[])){
-        let k=null,bb=null,bf=null,ip=null,gs=null;
+        // Accumulate across ALL season splits. Traded/multi-team pitchers return
+        // one split per team; summing reconstructs the true season line. (The old
+        // code overwrote each split, keeping only the LAST team's partial line →
+        // corrupted K-BB%, the strongest feature, for traded starters.)
+        let k=0,bb=0,bf=0,ip=0,gs=0,have=false;
         for(const st of (p.stats||[])) for(const sp of (st.splits||[])){
-          const s=sp.stat||{}; k=+s.strikeOuts; bb=+s.baseOnBalls; bf=+s.battersFaced;
-          ip=parseFloat(s.inningsPitched); gs=+s.gamesStarted;
+          const s=sp.stat||{};
+          k+=(+s.strikeOuts||0); bb+=(+s.baseOnBalls||0); bf+=(+s.battersFaced||0);
+          ip+=(parseFloat(s.inningsPitched)||0); gs+=(+s.gamesStarted||0); have=true;
         }
-        if(bf>0){ const q=_kbbQuality((k-bb)/bf, bf); if(q!=null) starterKBB[p.id]=q; }
-        if(gs>=2 && ip>0){ starterOuts[p.id]=(ip*3)/gs; }   // avg outs per start
+        if(have && bf>0){ const q=_kbbQuality((k-bb)/bf, bf); if(q!=null) starterKBB[p.id]=q; }
+        if(have && gs>=2 && ip>0){ starterOuts[p.id]=(ip*3)/gs; }   // avg outs per start
       }
     }catch(e){}
   }
@@ -1307,10 +1327,14 @@ function nnLogResult(gamePk,homeWon){
   const e=nnGameLog.find(x=>x.id==gamePk);
   if(!e||e.result!=null) return false;
   e.result=homeWon?1:0;
-  const LR=0.05, L=logit(e.rawP), p=sigmoid(NN_PLATT.a*L+NN_PLATT.b), err=p-e.result;
+  // Online Platt SGD with a DECAYING learning rate (LR0/(1+n/τ), floored). A
+  // fixed LR oscillated on tiny early-season samples; decay makes early updates
+  // gentle and steadies the fit as the graded sample grows (only ever more stable).
+  const n0=NN_PLATT.n||0, LR=Math.max(0.01, 0.05/(1+n0/40));
+  const L=logit(e.rawP), p=sigmoid(NN_PLATT.a*L+NN_PLATT.b), err=p-e.result;
   NN_PLATT.a=Math.max(0.1,Math.min(3.0,NN_PLATT.a-LR*err*L));
   NN_PLATT.b=Math.max(-2,Math.min(2,NN_PLATT.b-LR*err));
-  NN_PLATT.n=(NN_PLATT.n||0)+1;
+  NN_PLATT.n=n0+1;
   try{
     localStorage.setItem(NN_LOG_KEY,JSON.stringify(nnGameLog));
     localStorage.setItem(NN_PLATT_KEY,JSON.stringify(NN_PLATT));
@@ -1333,6 +1357,75 @@ function buildNNStatText(){
   return '&#x1F9E0; Real-Data Model · '+s.n+' results logged · '+Math.round(s.acc*100)+'% live accuracy · Platt a='+s.plattA+' b='+s.plattB+' <span style="color:var(--dim2)">· click for track record</span>';
 }
 
+// ── MODEL CALIBRATION (reliability diagram) ──────────────────────────────────
+//  The keystone honesty check: "when the model is X% confident, does the pick
+//  actually win ~X% of the time?" Computed from the season walk-forward replay
+//  (loadModelRecords) so it has a large, point-in-time sample immediately —
+//  rather than waiting for the locally-logged buffer to fill.
+let MODEL_CALIB=null;   // {buckets:[{lo,hi,n,conf,acc}], N, ece, brier}
+function _calibFromGraded(graded){
+  const edges=[0.50,0.55,0.60,0.65,0.70,0.80,1.001];
+  const buckets=[];
+  for(let i=0;i<edges.length-1;i++){
+    const lo=edges[i], hi=edges[i+1];
+    const inB=graded.filter(g=>g.conf>=lo && g.conf<hi);
+    if(!inB.length){ buckets.push({lo,hi,n:0,conf:(lo+hi)/2,acc:null}); continue; }
+    const conf=inB.reduce((s,g)=>s+g.conf,0)/inB.length;
+    const acc=inB.filter(g=>g.correct).length/inB.length;
+    buckets.push({lo,hi,n:inB.length,conf,acc});
+  }
+  const N=graded.length; let ece=0, brier=0;
+  for(const b of buckets){ if(b.n) ece+=(b.n/N)*Math.abs(b.conf-b.acc); }       // expected calibration error
+  for(const g of graded){ brier+=Math.pow(g.conf-(g.correct?1:0),2); }
+  brier=N?brier/N:0;
+  return {buckets, N, ece, brier};
+}
+function renderCalibrationSVG(c, opts={}){
+  const W=320,H=240,m={l:38,r:12,t:12,b:34};
+  const x0=opts.x0??0.45,x1=opts.x1??0.95,y0=opts.y0??0.45,y1=opts.y1??0.95;
+  const _ticks=opts.ticks||[0.5,0.6,0.7,0.8,0.9];
+  const _xlab=opts.xlab||'Model confidence %', _ylab=opts.ylab||'Actual win %';
+  const px=v=>m.l+((Math.max(x0,Math.min(x1,v))-x0)/(x1-x0))*(W-m.l-m.r);
+  const py=v=>H-m.b-((Math.max(y0,Math.min(y1,v))-y0)/(y1-y0))*(H-m.t-m.b);
+  let g='';
+  for(const t of _ticks){
+    g+=`<line x1="${px(t)}" y1="${m.t}" x2="${px(t)}" y2="${H-m.b}" stroke="#13283e"/>`;
+    g+=`<line x1="${m.l}" y1="${py(t)}" x2="${W-m.r}" y2="${py(t)}" stroke="#13283e"/>`;
+    g+=`<text x="${px(t)}" y="${H-m.b+14}" fill="#6f8fab" font-size="9" text-anchor="middle">${Math.round(t*100)}</text>`;
+    g+=`<text x="${m.l-6}" y="${py(t)+3}" fill="#6f8fab" font-size="9" text-anchor="end">${Math.round(t*100)}</text>`;
+  }
+  g+=`<line x1="${px(x0)}" y1="${py(y0)}" x2="${px(x1)}" y2="${py(y1)}" stroke="#7a99b5" stroke-width="1.5" stroke-dasharray="4 3"/>`;
+  const maxN=Math.max(1,...c.buckets.filter(b=>b.n).map(b=>b.n));
+  let dots='';
+  for(const b of c.buckets){
+    if(!b.n) continue;
+    const r=(4+6*Math.sqrt(b.n/maxN)).toFixed(1);
+    const off=Math.abs(b.conf-b.acc);
+    const col=off<=0.03?'#22c55e':off<=0.06?'#fbbf24':'#f87171';
+    dots+=`<circle cx="${px(b.conf).toFixed(1)}" cy="${py(b.acc).toFixed(1)}" r="${r}" fill="${col}" fill-opacity="0.72" stroke="${col}"><title>${Math.round(b.conf*100)}% confident → ${Math.round(b.acc*100)}% won (${b.n} games)</title></circle>`;
+  }
+  const cy=(m.t+(H-m.b))/2;
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:340px;height:auto" role="img" aria-label="Model calibration reliability diagram">`+
+    `<rect x="${m.l}" y="${m.t}" width="${W-m.l-m.r}" height="${H-m.t-m.b}" fill="#0a1727" stroke="#1e3a55"/>`+
+    g+dots+
+    `<text x="${m.l+(W-m.l-m.r)/2}" y="${H-4}" fill="#7a99b5" font-size="10" text-anchor="middle">${_xlab}</text>`+
+    `<text x="12" y="${cy}" fill="#7a99b5" font-size="10" text-anchor="middle" transform="rotate(-90 12 ${cy})">${_ylab}</text>`+
+  `</svg>`;
+}
+function renderCalibrationPanel(){
+  const c=MODEL_CALIB;
+  if(!c || !c.N) return '';
+  return `<div class="tr-wrap">
+    <div class="tr-head">&#x1F3AF; Model calibration <span class="tr-sub">${c.N.toLocaleString()} season games · walk-forward · is a "65% confident" pick right ~65% of the time?</span></div>
+    <div class="tr-kpis">
+      <div class="tr-kpi"><div class="tr-big ${c.ece<=0.04?'tr-good':''}">${(c.ece*100).toFixed(1)}%</div><div class="tr-lbl">Calibration error (ECE · lower better)</div></div>
+      <div class="tr-kpi"><div class="tr-big">${c.brier.toFixed(3)}</div><div class="tr-lbl">Brier score (lower better)</div></div>
+    </div>
+    ${renderCalibrationSVG(c)}
+    <div class="tr-foot">Reliability diagram: each dot is a confidence band — x = model confidence, y = how often those picks actually won; bigger dots = more games. On the dashed line = perfectly calibrated · above = under-confident · below = over-confident. Point-in-time season replay (no lookahead).</div>
+  </div>`;
+}
+
 // ── LIVE TRACK RECORD — built from logged predictions + real results ─────────
 // Uses the calibrated prob (plattScale) for the pick; buckets by confidence so
 // you can see whether confident picks really hit harder, live (not just backtest).
@@ -1341,7 +1434,8 @@ function buildTrackRecord(){
   const labeled=nnGameLog.filter(e=>e.result!=null);
   if(labeled.length<1){
     el.innerHTML=`<div class="tr-wrap"><div class="tr-head">📈 Live Track Record</div>
-      <div class="tr-empty">No graded games yet. The model auto-logs each day's picks and grades them from real final scores — check back after games finish. (Backtest baseline: 57% overall, 60–66% on confident picks.)</div></div>`;
+      <div class="tr-empty">No graded games yet. The model auto-logs each day's picks and grades them from real final scores — check back after games finish. (Backtest baseline: 57% overall, 60–66% on confident picks.)</div></div>
+      ${renderCalibrationPanel()}`;
     return;
   }
   const pick=e=>plattScale(e.rawP)>=0.5?1:0;
@@ -1375,7 +1469,8 @@ function buildTrackRecord(){
       return `<div class="tr-tiers"><div class="tr-row"><span>&#x1F3B2; O/U leans vs market (&ge;0.5 gap)</span><span><b>${hit}&ndash;${leans.length-hit}</b> (${pct}%) · ${pct>=53&&leans.length>=20?'<span style="color:var(--green)">edge — eligible for Best Bets</span>':'building sample'}</span></div></div>`;
     })()}
     <div class="tr-foot">Pick = calibrated model favorite. Buckets show whether confidence translates to live accuracy. Backtest: ~57% overall, 60–66% confident. <b>O/U</b> is forward-tested here (proj total vs the DraftKings line vs the real result) and only promoted to Best Bets once it shows a real edge over ≥20 leans. Sample grows daily.</div>
-  </div>`;
+  </div>
+  ${renderCalibrationPanel()}`;
 }
 
 // ── Log result and update UI ──────────────────────────────────────
@@ -1431,7 +1526,7 @@ function injuryAdjProb(baseP, homeInjuries, awayInjuries){
 
 // ═══════════════════════════════════════════════════════════════
 //  CONSENSUS BLEND
-//  Vegas (50%) + ESPN predictor (30%) + Neural Net (20-25%)
+//  Vegas (50%) + ESPN predictor (30%) + Real-data model (20-25%)
 //  Model weight rises to 25% when pitcher data is available.
 //  Weights normalize automatically if sources are missing.
 // ═══════════════════════════════════════════════════════════════
@@ -1468,6 +1563,17 @@ async function espnFetch(url){
     }catch(e){ lastErr=e; if(i<2) await new Promise(res=>setTimeout(res, 400*(i+1))); }
   }
   throw lastErr;
+}
+
+// Run async `fn` over `items` with BOUNDED concurrency. ESPN throttles bursts
+// (~15 parallel summary calls on load), which triggers the 3× retry/backoff storm
+// and dominates load time; a small pool keeps us under the throttle. Preserves
+// input order in the returned array.
+async function mapPool(items, limit, fn){
+  const out=new Array(items.length); let i=0;
+  const worker=async()=>{ while(i<items.length){ const idx=i++; out[idx]=await fn(items[idx], idx); } };
+  await Promise.all(Array.from({length:Math.min(limit, items.length||1)}, worker));
+  return out;
 }
 
 // ESPN scoreboard → game list with event IDs and probable pitchers
@@ -1648,9 +1754,19 @@ async function fetchInjuries(){
 //  MLB STATS API FETCHING
 // ═══════════════════════════════════════════════════════════════
 async function mlbFetch(path){
-  const r=await fetch(MLB_BASE+path);
-  if(!r.ok) throw new Error(`MLB ${r.status}`);
-  return r.json();
+  // Retry transient failures (429/503/network). statsapi is the model's primary
+  // and richest source — one dropped call used to drop the whole app to the
+  // W/L-only ESPN fallback (zeroing pythag/run-diff). 3 attempts w/ backoff,
+  // mirroring espnFetch.
+  let lastErr;
+  for(let i=0;i<3;i++){
+    try{
+      const r=await fetch(MLB_BASE+path);
+      if(!r.ok) throw new Error(`MLB ${r.status}`);
+      return await r.json();
+    }catch(e){ lastErr=e; if(i<2) await new Promise(res=>setTimeout(res, 400*(i+1))); }
+  }
+  throw lastErr;
 }
 
 async function loadMLBData(){
@@ -1782,12 +1898,23 @@ function gamesFromESPN(espnGames){
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  KALSHI RSA-PSS SIGNING  (Web Crypto API)
-//  Kalshi v2 API requires signed requests — no more Bearer tokens.
-//  Docs: https://kalshi.com/docs/api-keys
+//  KALSHI DEBUG STATE
 // ═══════════════════════════════════════════════════════════════
-let _kalshiKey = null; // cached CryptoKey
 let _kalshiDebug = {attempts:[], results:[], errors:[], markets:[]}; // debug log
+
+// ── Kalshi response cache (localStorage) ─────────────────────────────────────
+// The Kalshi proxy gets rate-limited (429) under bursty load (it has no caching).
+// Caching the last good response lets odds (a) skip re-fetching within a short
+// window — which also stops us re-tripping the limit — and (b) keep SHOWING
+// through transient 429s by falling back to the last good copy.
+const KCACHE_KEY='kalshi_cache_v1';
+let _kCache=(()=>{try{return JSON.parse(localStorage.getItem(KCACHE_KEY)||'{}')||{};}catch(e){return{};}})();
+function _kCacheGet(k,maxAgeMs){ const e=_kCache[k]; return (e && (Date.now()-e.ts)<=maxAgeMs)?e.v:null; }
+function _kCacheGetStale(k){ const e=_kCache[k]; return e?e.v:null; }
+function _kCacheSet(k,v){ _kCache[k]={ts:Date.now(),v};
+  try{ localStorage.setItem(KCACHE_KEY,JSON.stringify(_kCache)); }
+  catch(e){ _kCache={[k]:{ts:Date.now(),v}}; try{ localStorage.setItem(KCACHE_KEY,JSON.stringify(_kCache)); }catch(e2){} }
+}
 
 async function showKalshiDebug(){
   const d = _kalshiDebug;
@@ -1827,55 +1954,6 @@ async function showKalshiDebug(){
   alert(lines.join('\n'));
 }
 
-function _pemToBytes(pem){
-  const b64 = pem.replace(/-----[^-]+-----/g,'').replace(/\s+/g,'');
-  const bin = atob(b64);
-  const buf = new Uint8Array(bin.length);
-  for(let i=0;i<bin.length;i++) buf[i]=bin.charCodeAt(i);
-  return buf;
-}
-
-// Convert PKCS#1 DER (-----BEGIN RSA PRIVATE KEY-----) → PKCS#8 DER
-// so Web Crypto importKey('pkcs8') accepts it.
-function _pkcs1ToDer(pkcs1){
-  function encLen(n){
-    if(n<128) return [n];
-    if(n<256) return [0x81,n];
-    return [0x82,(n>>8)&0xff,n&0xff];
-  }
-  function seq(data){ return [0x30,...encLen(data.length),...data]; }
-  function octStr(data){ return [0x04,...encLen(data.length),...data]; }
-  const algId=[0x30,0x0d,0x06,0x09,0x2a,0x86,0x48,0x86,0xf7,0x0d,0x01,0x01,0x01,0x05,0x00];
-  const inner=seq([0x02,0x01,0x00,...algId,...octStr([...pkcs1])]);
-  return new Uint8Array(inner).buffer;
-}
-
-async function _importKalshiKey(pem){
-  if(_kalshiKey) return _kalshiKey;
-  const bytes = _pemToBytes(pem.trim());
-  const isPkcs1 = pem.includes('BEGIN RSA PRIVATE KEY');
-  const keyBuf  = isPkcs1 ? _pkcs1ToDer(bytes) : bytes.buffer;
-  _kalshiKey = await crypto.subtle.importKey(
-    'pkcs8', keyBuf,
-    {name:'RSA-PSS', hash:'SHA-256'},
-    false, ['sign']
-  );
-  return _kalshiKey;
-}
-
-async function _kalshiSign(path){
-  const key = await _importKalshiKey(KALSHI_PRIVATE_KEY_PEM);
-  const ts  = Date.now().toString();
-  const msg = ts + 'GET' + path.split('?')[0];
-  const sig = await crypto.subtle.sign(
-    {name:'RSA-PSS', saltLength:32},
-    key,
-    new TextEncoder().encode(msg)
-  );
-  const b64 = btoa(String.fromCharCode(...new Uint8Array(sig)));
-  return {ts, b64};
-}
-
 // ═══════════════════════════════════════════════════════════════
 //  KALSHI FETCHING
 // ═══════════════════════════════════════════════════════════════
@@ -1888,7 +1966,7 @@ async function kalshiPublicFetch(path){
     ...(KALSHI_PROXY ? [KALSHI_PROXY + '?path=' + encodeURIComponent(path)] : []),
     url,
     'https://api.allorigins.win/raw?url=' + encodeURIComponent(url),
-    'https://api.codetabs.com/v1/proxy/?quest=' + url,
+    'https://api.codetabs.com/v1/proxy/?quest=' + encodeURIComponent(url),
   ];
   let lastErr;
   for(const u of attempts){
@@ -1901,23 +1979,6 @@ async function kalshiPublicFetch(path){
   throw lastErr || new Error('Kalshi fetch failed');
 }
 
-// Authenticated Kalshi fetch — used for private endpoints (portfolio, trading, etc.)
-async function kalshiFetch(path){
-  const hasKey = KALSHI_PRIVATE_KEY_PEM.trim().length > 0;
-  let headers = {'Accept':'application/json'};
-  if(hasKey){
-    try{
-      const {ts,b64} = await _kalshiSign(path);
-      headers['KALSHI-ACCESS-KEY']       = KALSHI_KEY_ID;
-      headers['KALSHI-ACCESS-TIMESTAMP'] = ts;
-      headers['KALSHI-ACCESS-SIGNATURE'] = b64;
-    }catch(e){ console.warn('Kalshi sign error:',e); }
-  }
-  const r = await fetch(KALSHI_BASE+path, {headers});
-  if(!r.ok) throw new Error(`Kalshi ${r.status}`);
-  return r.json();
-}
-
 async function fetchKalshiMarkets(){
   // MLB single-game moneyline lives in series KXMLBGAME. The markets endpoint
   // (filtered to open + closing in the future) returns today's tradeable games
@@ -1926,24 +1987,29 @@ async function fetchKalshiMarkets(){
   const now = Math.floor(Date.now()/1000);
   const path = `/markets?series_ticker=KXMLBGAME&status=open&min_close_ts=${now}&limit=400`;
   _kalshiDebug.attempts.push(`GET ${path}`);
-  try{
-    const d = await kalshiPublicFetch(path);
-    const mkts = d.markets || [];
-    _kalshiDebug.results.push(`KXMLBGAME markets: ${mkts.length}`);
-    const byEvent = {};
-    for(const m of mkts){
-      const et = m.event_ticker || '';
-      if(!et) continue;
-      (byEvent[et] = byEvent[et] || {event_ticker:et, title:m.title||et, markets:[]}).markets.push(m);
-    }
-    const events = Object.values(byEvent);
-    _kalshiDebug.results.push(`events: ${events.length}`);
-    for(const ev of events) _kalshiDebug.markets.push(...ev.markets);
-    return events;
-  }catch(e){
-    _kalshiDebug.errors.push(`KXMLBGAME: ${e.message}`);
-    return [];
+  // Cache-first: a fresh (<=75s) copy avoids re-hitting the rate-limited proxy on
+  // every load/refresh; on failure, fall back to the last good copy (any age) so
+  // odds keep showing through a transient 429 instead of going blank.
+  const CK='kxmlbgame';
+  const fresh=_kCacheGet(CK,75000);
+  if(fresh){ _kalshiDebug.results.push(`cache hit (${fresh.length} events)`); return fresh; }
+  let d=null;
+  try{ d = await kalshiPublicFetch(path); }
+  catch(e){ _kalshiDebug.errors.push(`KXMLBGAME: ${e.message}`); }
+  if(!d){ const stale=_kCacheGetStale(CK); if(stale){ _kalshiDebug.results.push(`stale cache (${stale.length} events)`); return stale; } return []; }
+  const mkts = d.markets || [];
+  _kalshiDebug.results.push(`KXMLBGAME markets: ${mkts.length}`);
+  const byEvent = {};
+  for(const m of mkts){
+    const et = m.event_ticker || '';
+    if(!et) continue;
+    (byEvent[et] = byEvent[et] || {event_ticker:et, title:m.title||et, markets:[]}).markets.push(m);
   }
+  const events = Object.values(byEvent);
+  _kalshiDebug.results.push(`events: ${events.length}`);
+  for(const ev of events) _kalshiDebug.markets.push(...ev.markets);
+  if(events.length) _kCacheSet(CK, events);
+  return events;
 }
 
 // First-5-innings markets: Kalshi series KXMLBF5 (3-way — each team + Tie).
@@ -1951,12 +2017,15 @@ async function fetchKalshiMarkets(){
 // ("Atlanta wins first 5 innings" → "Atlanta") so kalshiMktForTeam matches; tag Tie.
 async function fetchKalshiF5(){
   const now=Math.floor(Date.now()/1000);
+  const CK='kxmlbf5';
+  const fresh=_kCacheGet(CK,75000);
+  if(fresh) return fresh;
   let d=null;
-  for(let i=0;i<3 && !d;i++){
+  for(let i=0;i<2 && !d;i++){   // gentle: 1 retry (was 3 — rapid retries worsened the rate-limit)
     try{ d=await kalshiPublicFetch(`/markets?series_ticker=KXMLBF5&status=open&min_close_ts=${now}&limit=1000`); }
-    catch(e){ d=null; if(i<2) await new Promise(r=>setTimeout(r,600*(i+1))); }
+    catch(e){ d=null; if(i<1) await new Promise(r=>setTimeout(r,700)); }
   }
-  if(!d) return [];
+  if(!d){ const stale=_kCacheGetStale(CK); return stale||[]; }
   const byEv={};
   for(const m of (d.markets||[])){
     const et=m.event_ticker; if(!et) continue;
@@ -1964,7 +2033,9 @@ async function fetchKalshiF5(){
     const norm = /tie/i.test(sub) ? 'TIE' : sub.replace(/\s*wins first 5 innings/i,'').trim();
     (byEv[et]=byEv[et]||{event_ticker:et, markets:[]}).markets.push({...m, yes_sub_title:norm});
   }
-  return Object.values(byEv);
+  const events=Object.values(byEv);
+  if(events.length) _kCacheSet('kxmlbf5', events);
+  return events;
 }
 // 3-way de-vigged F5 market probs + raw asks from a matched KXMLBF5 event.
 function f5Market(ev, homeName, awayName){
@@ -2040,45 +2111,9 @@ function kalshiEventTime(ev){
   return Date.UTC(2000+ +m[1], mon, +m[3], +m[4]+4, +m[5]); // ET→UTC ≈ +4h
 }
 
-// All valid MLB abbreviations used in our system
-const MLB_ABBRS = new Set([
-  'NYY','NYM','BOS','TBR','BAL','TOR','CLE','MIN','DET','CWS','KCR',
-  'HOU','TEX','LAA','OAK','SEA','ATL','NYM','PHI','MIA','WSH','CHC',
-  'MIL','STL','CIN','PIT','LAD','SFG','SDP','COL','ARI',
-]);
-
-function parseKalshiTeams(event){
-  const ticker = event.event_ticker||'';
-
-  // Strategy 1: extract abbrs from event ticker (e.g. KXMLB-NYY-BOS-20250520)
-  const tickerParts = ticker.toUpperCase().split('-');
-  const fromTicker = tickerParts.filter(p=>MLB_ABBRS.has(p));
-  if(fromTicker.length>=2) return fromTicker.slice(0,2);
-
-  // Strategy 2: look for abbrs in market tickers (e.g. KXMLB-NYY-20250520-W)
-  for(const mkt of event.markets||[]){
-    const mp=(mkt.ticker||'').toUpperCase().split('-');
-    const hits=mp.filter(p=>MLB_ABBRS.has(p));
-    if(hits.length>=2) return hits.slice(0,2);
-  }
-
-  // Strategy 3: text-search titles using TEAM_NAME_MAP
-  const txt=[
-    event.title||'', event.sub_title||'', ticker,
-    ...(event.markets||[]).map(m=>(m.title||'')+' '+(m.subtitle||'')),
-  ].join(' | ');
-  const names=Object.keys(TEAM_NAME_MAP).sort((a,b)=>b.length-a.length);
-  const found=[];
-  let rem=txt;
-  for(const name of names){
-    if(rem.toLowerCase().includes(name.toLowerCase())){
-      const abbr=TEAM_NAME_MAP[name];
-      if(!found.includes(abbr)){found.push(abbr);rem=rem.replace(new RegExp(name,'gi'),'');}
-    }
-    if(found.length>=2) break;
-  }
-  return found;
-}
+// (Removed unused parseKalshiTeams()/MLB_ABBRS — Kalshi events are matched by team
+//  name via kalshiMktForTeam(); the old ticker-parser had no callers and built a
+//  RegExp from unescaped team names.)
 
 function marketProb(market){
   if(!market) return null;
@@ -2124,6 +2159,9 @@ function fmtTime(iso){
   try{return new Date(iso).toLocaleTimeString([],{hour:'numeric',minute:'2-digit',timeZoneName:'short'});}
   catch(e){return '';}
 }
+// Escape external-API strings before they go into innerHTML (defense-in-depth
+// vs DOM-XSS: team/pitcher/injury names, Kalshi tickers, provider names, etc.).
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 // ═══════════════════════════════════════════════════════════════
 //  RENDER
@@ -2158,6 +2196,15 @@ function renderGame(game, extras){
   const awayKBBq = starterKBB[game.awaySpId] ?? null;
   const modelResult = modelPredictEnhanced(homeAbbr, awayAbbr, homeKBBq, awayKBBq);
   let modelHomeP = modelResult.p ?? 0.5;
+  // Apply the injury adjustment HERE — before projectScore / consensus / value —
+  // so ONE consistent p feeds every consumer. (Previously it ran after
+  // projectScore, so an injury bump that flipped the favorite could make the
+  // projected score contradict the model pick.)
+  const hInjPre = (injuries[homeAbbr]||[]);
+  const aInjPre = (injuries[awayAbbr]||[]);
+  if(hInjPre.length>0 || aInjPre.length>0){
+    modelHomeP = injuryAdjProb(modelHomeP, hInjPre, aInjPre);
+  }
   // FIRST 5 INNINGS (F5) — the headline prediction now. 3-way: home/tie/away leads after 5.
   const f5 = f5Probs(homeAbbr, awayAbbr, homeKBBq, awayKBBq);   // {h,t,a} or null
   // F5 market (Kalshi KXMLBF5, 3-way) + model value play vs the ask
@@ -2197,12 +2244,8 @@ function renderGame(game, extras){
   const parkAdjActive    = modelResult.parkAdjActive;
   if(game.gamePk && modelResult.rawP!=null) nnLogPrediction(game.gamePk, modelResult.rawP, homeAbbr, awayAbbr, projTotal, ouLine);
 
-  // Apply injury adjustment on top of model
-  const hInjPre = (injuries[homeAbbr]||[]);
-  const aInjPre = (injuries[awayAbbr]||[]);
-  if(hInjPre.length>0 || aInjPre.length>0){
-    modelHomeP = injuryAdjProb(modelHomeP, hInjPre, aInjPre);
-  }
+  // (Injury adjustment already applied above so projectScore/consensus/value all
+  //  use the same p — keeps the projected winner consistent with the pick.)
   const modelAwayP = 1 - modelHomeP;
 
   // Vegas odds (primary + secondary book)
@@ -2376,21 +2419,21 @@ function renderGame(game, extras){
   card.className='game-card';
 
   const awayPitcherHtml = pitchers && pitchers.away
-    ? `<span class="pitcher-name">${pitchers.away.shortName||pitchers.away.name}</span>`
-      + (pitchers.away.era ? `<span class="pitcher-stat">(${pitchers.away.wins}-${pitchers.away.losses}, ${pitchers.away.era} ERA)</span>` : '')
+    ? `<span class="pitcher-name">${esc(pitchers.away.shortName||pitchers.away.name)}</span>`
+      + (pitchers.away.era ? `<span class="pitcher-stat">(${esc(pitchers.away.wins)}-${esc(pitchers.away.losses)}, ${esc(pitchers.away.era)} ERA)</span>` : '')
     : 'TBD';
   const homePitcherHtml = pitchers && pitchers.home
-    ? `<span class="pitcher-name">${pitchers.home.shortName||pitchers.home.name}</span>`
-      + (pitchers.home.era ? `<span class="pitcher-stat">(${pitchers.home.wins}-${pitchers.home.losses}, ${pitchers.home.era} ERA)</span>` : '')
+    ? `<span class="pitcher-name">${esc(pitchers.home.shortName||pitchers.home.name)}</span>`
+      + (pitchers.home.era ? `<span class="pitcher-stat">(${esc(pitchers.home.wins)}-${esc(pitchers.home.losses)}, ${esc(pitchers.home.era)} ERA)</span>` : '')
     : 'TBD';
 
-  const injChip = (i) => `<span class="inj-chip${i.status.toLowerCase().includes('question')?' qtbl':''}" title="${i.status}">${i.name}${i.pos?' ('+i.pos+')':''}</span>`;
+  const injChip = (i) => `<span class="inj-chip${i.status.toLowerCase().includes('question')?' qtbl':''}" title="${esc(i.status)}">${esc(i.name)}${i.pos?' ('+esc(i.pos)+')':''}</span>`;
 
   let html = `
     <div class="card-header">
       <div class="team-side away">
         <div class="team-logo-name">
-          <img class="team-logo" src="${MLB_LOGO(awayId)}" alt="${awayAbbr}" onerror="this.style.display='none'"/>
+          <img class="team-logo" src="${MLB_LOGO(awayId)}" alt="" onerror="this.style.display='none'"/>
           <span class="team-name">${awayAbbr}</span>
           ${awayScoreHtml}
         </div>
@@ -2404,7 +2447,7 @@ function renderGame(game, extras){
         <div class="team-logo-name">
           ${homeScoreHtml}
           <span class="team-name">${homeAbbr}</span>
-          <img class="team-logo" src="${MLB_LOGO(homeId)}" alt="${homeAbbr}" onerror="this.style.display='none'"/>
+          <img class="team-logo" src="${MLB_LOGO(homeId)}" alt="" onerror="this.style.display='none'"/>
         </div>
         <span class="team-record">${hRec}${hStat.streak?' &middot; '+hStat.streak:''}</span>
       </div>
@@ -2550,18 +2593,18 @@ function renderGame(game, extras){
       <div class="detail-stat" style="margin-bottom:12px">
         <h4>&#x26BE; Starting Pitchers (ESPN)</h4>
         ${statRow(
-          pitchers.away?(pitchers.away.name+' ('+(pitchers.away.wins||0)+'-'+(pitchers.away.losses||0)+')'):'TBD',
+          pitchers.away?(esc(pitchers.away.name)+' ('+(pitchers.away.wins||0)+'-'+(pitchers.away.losses||0)+')'):'TBD',
           'SP',
-          pitchers.home?(pitchers.home.name+' ('+(pitchers.home.wins||0)+'-'+(pitchers.home.losses||0)+')'):'TBD',
+          pitchers.home?(esc(pitchers.home.name)+' ('+(pitchers.home.wins||0)+'-'+(pitchers.home.losses||0)+')'):'TBD',
           false,false)}
-        ${(pitchers.away&&pitchers.away.era&&pitchers.home&&pitchers.home.era)?statRow(pitchers.away.era,'ERA',pitchers.home.era,
+        ${(pitchers.away&&pitchers.away.era&&pitchers.home&&pitchers.home.era)?statRow(esc(pitchers.away.era),'ERA',esc(pitchers.home.era),
           parseFloat(pitchers.away.era)<parseFloat(pitchers.home.era),
           parseFloat(pitchers.home.era)<parseFloat(pitchers.away.era)):''} 
       </div>`:''}
       ${hasMarket?`
       <div class="kalshi-detail">
         <h4>&#x26A1; Kalshi Market</h4>
-        <div class="kd-row"><span>Ticker</span><span style="font-family:monospace;font-size:.76rem">${mktTicker||'&mdash;'}</span></div>
+        <div class="kd-row"><span>Ticker</span><span style="font-family:monospace;font-size:.76rem">${esc(mktTicker)||'&mdash;'}</span></div>
         <div class="kd-row"><span>${homeAbbr} implied</span><span style="color:var(--purple)">${fmtPct(mktHomeP)}</span></div>
         <div class="kd-row"><span>${awayAbbr} implied</span><span style="color:var(--purple)">${fmtPct(1-mktHomeP)}</span></div>
         ${mktBid!=null?`<div class="kd-row"><span>${homeAbbr} Bid / Ask</span><span>${Math.round(mktBid*100)}&cent; / ${Math.round(mktAsk*100)}&cent;</span></div>`:''}
@@ -2573,7 +2616,7 @@ function renderGame(game, extras){
         <div style="font-size:.78rem;color:var(--dim2);margin-top:4px">This game may not have an active Kalshi market yet.</div>
       </div>`}
       <div class="detail-cta">
-        ${mktTicker?`<a class="kalshi-link" href="https://kalshi.com/markets/${mktTicker}" target="_blank" rel="noopener">&#x26A1; Trade on Kalshi &#x2197;</a>`:''}
+        ${mktTicker?`<a class="kalshi-link" href="https://kalshi.com/markets/${encodeURIComponent(mktTicker)}" target="_blank" rel="noopener">&#x26A1; Trade on Kalshi &#x2197;</a>`:''}
         ${vegasOdds&&vegasOdds.overUnder?`<span>O/U: ${vegasOdds.overUnder}</span>`:''}
         <span style="margin-left:auto;font-size:.7rem">Blend: model ${pitcherAdjActive?'25':'20'}%·Vegas 50%·ESPN 30%${adjBadges?' ['+adjBadges+']':''}</span>
       </div>
@@ -2589,8 +2632,16 @@ function renderGame(game, extras){
   card.dataset.time   = String(new Date(gameTime).getTime()||0);
   card.dataset.edge   = String(Math.abs(modelHomeP-0.5).toFixed(4));   // model confidence
   card.dataset.value  = String((bet && !_isFinal && !_isLive) ? (bet.roi||0).toFixed(4) : -1); // model-value ROI, else -1
-  card.querySelector('.card-header').addEventListener('click',()=>card.classList.toggle('expanded'));
-  card.querySelector('.edge-row').addEventListener('click',()=>card.classList.toggle('expanded'));
+  // Expand/collapse is now keyboard-accessible: the header and edge row act as
+  // real buttons (role/tabindex/aria-expanded + Enter/Space), not mouse-only divs.
+  const _hdrEl=card.querySelector('.card-header');
+  const _edgeEl=card.querySelector('.edge-row');
+  const _toggle=()=>{ const ex=card.classList.toggle('expanded'); if(_hdrEl) _hdrEl.setAttribute('aria-expanded',ex?'true':'false'); };
+  [_hdrEl,_edgeEl].forEach(el=>{ if(!el) return;
+    el.setAttribute('role','button'); el.setAttribute('tabindex','0'); el.setAttribute('aria-expanded','false');
+    el.addEventListener('click',_toggle);
+    el.addEventListener('keydown',e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); _toggle(); } });
+  });
   card.querySelectorAll('.nn-log-btn').forEach(btn=>{
     btn.addEventListener('click',()=>nnLogAndRefresh(btn.dataset.gpk,+btn.dataset.hw,btn.dataset.ha,btn.dataset.aa,btn));
   });
@@ -2726,12 +2777,23 @@ async function autoCalibrateFromResults(){
   const pendingBets=Object.values(betsLog).filter(b=>b.result==null && b.date && (b.league==='MLB'||b.league==='MLBF5'));
   if(!pending.length && !pendingBets.length) return;
   const dates=[...pending.map(e=>e.date), ...pendingBets.map(b=>b.date)].filter(Boolean).sort();
-  const start=dates[0], end=new Date().toISOString().slice(0,10);
+  const end=new Date().toISOString().slice(0,10);
+  // Cap the lookback window: a single never-settled old bet/prediction could
+  // otherwise push `start` arbitrarily far back and re-request a huge multi-month
+  // schedule on every load. 21 days covers the displayed track record.
+  const _floor=new Date(); _floor.setDate(_floor.getDate()-21);
+  const _floorStr=_floor.toISOString().slice(0,10);
+  const start=(dates[0] && dates[0]>_floorStr)?dates[0]:_floorStr;
   try{
     const url=`https://statsapi.mlb.com/api/v1/schedule?sportId=1&startDate=${start}&endDate=${end}&hydrate=linescore`;
-    const r=await fetch(url,{headers:{'Accept':'application/json'}});
-    if(!r.ok) return;
-    const d=await r.json();
+    // One retry — a single transient non-OK used to silently skip ALL calibration.
+    let d=null;
+    for(let i=0;i<2 && !d;i++){
+      try{ const r=await fetch(url,{headers:{'Accept':'application/json'}}); if(r.ok) d=await r.json(); }
+      catch(e){}
+      if(!d && i<1) await new Promise(res=>setTimeout(res,500));
+    }
+    if(!d) return;
     const finals={};
     for(const day of (d.dates||[])){
       for(const g of (day.games||[])){
@@ -2755,8 +2817,9 @@ async function autoCalibrateFromResults(){
     for(const bid in betsLog){
       const b=betsLog[bid]; if(b.result!=null) continue;
       const f=finals[bid.split(':')[1]]; if(f==null) continue;
-      if(b.league==='MLB' && f.hw!=null) gradeBet(bid, (b.pick===b.homeAbbr)===(f.hw===1));        // legacy full-game
-      else if(b.league==='MLBF5' && f.f5) gradeBet(bid,                                            // first-5-innings
+      // (Full-game MLB bets are reference-only and never logged, so the old
+      //  league==='MLB' branch was unreachable and referenced a missing field.)
+      if(b.league==='MLBF5' && f.f5) gradeBet(bid,                                                 // first-5-innings
         (b.side==='home'&&f.f5==='H')||(b.side==='away'&&f.f5==='A')||(b.side==='tie'&&f.f5==='T'));
     }
     if(n>0) console.info(`Auto-calibrated on ${n} real result(s). Platt a=${NN_PLATT.a.toFixed(3)} b=${NN_PLATT.b.toFixed(3)}`);
@@ -2778,7 +2841,7 @@ async function loadModelRecords(){
   const y=new Date(); y.setDate(y.getDate()-1); const ystr=_ymd(y);
   const CK='mlb_model_records_v1';
   try{ const c=JSON.parse(localStorage.getItem(CK)||'null');
-    if(c && c.date===ystr && c.html){ el.innerHTML=c.html; el.style.display='block'; return; } }catch(e){}
+    if(c && c.date===ystr && c.html){ el.innerHTML=c.html; el.style.display='block'; if(c.calib) MODEL_CALIB=c.calib; return; } }catch(e){}
   try{
     const data=await mlbFetch(`/schedule?sportId=1&startDate=${SEASON}-03-01&endDate=${ystr}&gameType=R&hydrate=probablePitcher`);
     const games=[];
@@ -2808,6 +2871,11 @@ async function loadModelRecords(){
       H.rs+=g.hs;H.ra+=g.as;A.rs+=g.as;A.ra+=g.hs;
     }
     if(!graded.length){ el.style.display='none'; return; }
+    // Calibration summary for the dashboard — from the SAME season walk-forward
+    // replay, so it has a large point-in-time sample on first load. Refresh the
+    // track-record panel if it's already open.
+    MODEL_CALIB=_calibFromGraded(graded);
+    if(document.getElementById('track-record') && document.getElementById('track-record').style.display!=='none') buildTrackRecord();
     const w7=new Date(y); w7.setDate(w7.getDate()-6); const w7str=_ymd(w7);
     const tally=a=>{const w=a.filter(x=>x.correct).length; return {w,l:a.length-w,n:a.length};};
     const fmt=t=> t.n?`<b>${t.w}–${t.l}</b> (${Math.round(t.w/t.n*100)}%)`:'—';
@@ -2820,7 +2888,7 @@ async function loadModelRecords(){
     const line2=`&#x1F3AF; <b>When confident</b> (season) &nbsp;·&nbsp; gave &ge;60% ${fmt(c60)} &nbsp;·&nbsp; gave &ge;70% ${fmt(c70)}`;
     const html=line1+'<br>'+line2;
     el.innerHTML=html; el.style.display='block';
-    try{ localStorage.setItem(CK, JSON.stringify({date:ystr,html})); }catch(e){}
+    try{ localStorage.setItem(CK, JSON.stringify({date:ystr,html,calib:MODEL_CALIB})); }catch(e){}
   }catch(e){ el.style.display='none'; }
 }
 
@@ -2886,7 +2954,9 @@ async function init(){
   }
 
   // ── Step 3: ESPN odds + predictor (one CORS-safe summary call per game) ──────
-  const summaryPromises = mlbGames.map(g=>{
+  // Bounded to a pool of 6 so we stay under ESPN's ~15-parallel throttle (which
+  // otherwise forces every call into 3× retry/backoff). Order is preserved.
+  const allSummaries = await mapPool(mlbGames, 6, (g)=>{
     const eg=matchESPN(g.homeAbbr,g.awayAbbr);
     if(!eg) return Promise.resolve({odds:null, predictor:null});
     return fetchGameSummary(eg.espnId).then(r=>{
@@ -2894,8 +2964,6 @@ async function init(){
       return r;
     }).catch(()=>({odds: eg.inlineOdds||null, predictor:null}));
   });
-
-  const allSummaries = await Promise.all(summaryPromises);
   const allOdds      = allSummaries.map(s=>s.odds);
   const allOdds2     = allSummaries.map(s=>s.odds2||null);
   const allPredictors= allSummaries.map(s=>s.predictor);
@@ -3022,22 +3090,28 @@ async function init(){
 // ── LIVE SCORE POLLING ───────────────────────────────────────────────────────
 // Every 45s re-fetch just the schedule (scores+inning) and patch the score
 // elements on each card in place — no model recompute, no full re-render.
-let _liveTimer=null;
+let _liveTimer=null, _sawLive=false;
 function startLiveScorePolling(){
   if(_liveTimer) clearInterval(_liveTimer);
+  _sawLive=false;
   _liveTimer=setInterval(refreshLiveScores, 45000);
 }
+function stopLiveScorePolling(){ if(_liveTimer){ clearInterval(_liveTimer); _liveTimer=null; } }
 async function refreshLiveScores(){
   try{
     const games=await loadMLBSchedule();   // light: schedule+linescore only
-    let anyLive=false;
+    let anyLive=false, anyPending=false;
     for(const g of games){
       const card=document.querySelector(`.game-card[data-gpk="${g.gamePk}"]`);
       if(!card) continue;
       patchCardScore(card, g);
-      if(g.status==='Live'||g.status==='In Progress') anyLive=true;
+      if(g.status==='Live'||g.status==='In Progress'){ anyLive=true; _sawLive=true; }
+      else if(g.status!=='Final') anyPending=true;
     }
-    if(!anyLive){ clearInterval(_liveTimer); _liveTimer=null; }  // all done for the day
+    // Stop polling ONLY once we've actually seen live games and none remain live
+    // or pending — otherwise a load before first pitch (all Preview) would kill
+    // polling forever and scores would never go live without a manual refresh.
+    if(_sawLive && !anyLive && !anyPending) stopLiveScorePolling();
   }catch(e){ /* transient; try again next tick */ }
 }
 function patchCardScore(card, g){
@@ -3118,7 +3192,12 @@ function renderBestBets(container, hdr){
 }
 
 document.addEventListener('DOMContentLoaded', init);
-document.getElementById('refresh-btn').addEventListener('click', init);
+// Close the slide-out menu on Escape (keyboard dismissal).
+document.addEventListener('keydown', e=>{ if(e.key==='Escape'){ const m=document.getElementById('nav-menu'); if(m && m.classList.contains('open')) toggleMenu(); } });
+// (Removed a dead `getElementById('refresh-btn')` listener that threw a TypeError
+//  on every load — there is no #refresh-btn id — which aborted the rest of this
+//  script and left the track-record toggles below unwired. The header Refresh
+//  button already works via its inline onclick="refreshActiveView()".)
 // Toggle the live track-record panel when the model stats bar is clicked
 (function(){
   const bar=document.getElementById('nn-stats-bar'), panel=document.getElementById('track-record');
