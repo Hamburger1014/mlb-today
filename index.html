@@ -394,6 +394,32 @@
     @media (prefers-reduced-motion: reduce){
       *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}
     }
+
+    /* ── Print / Save-as-PDF ──────────────────────────────────────────────────
+       Browsers strip background colors when saving to PDF (the "Background
+       graphics" option is off by default) — which was blanking the prediction
+       bars (they're CSS gradients). Force colors to render AND lay it out as a
+       clean, readable light document. Screen view is untouched (print-only). */
+    @media print {
+      *, *::before, *::after { -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
+      :root {
+        --bg:#ffffff; --card:#ffffff; --card2:#f3f6fa; --card3:#e8eef5;
+        --border:#d3dde8; --border2:#b6c6d6; --text:#0f2033; --dim:#42586e; --dim2:#5a7188;
+      }
+      body, #mlb-view, #wc-view, header, main { background:#ffffff !important; }
+      header { position:static !important; border-bottom:1px solid #d3dde8 !important; }
+      .hdr-title, .hdr-logo, .hdr-date { color:#0f2033 !important; }
+      .legend, .wc-intro, #nn-stats-bar, #wc-stats-bar, #yday-record,
+      #track-record, #wc-track-record, footer { background:#f7fafc !important; }
+      .consensus-block { background:#f2f7fd !important; border-color:#c3d6ee !important; }
+      .best-bets { background:#f2fbf5 !important; }
+      .card-detail, .detail-stat, .kalshi-detail { background:#f7fafc !important; }
+      .consensus-bar-track, .src-bar-track { background:#e2e8f0 !important; }
+      /* hide interactive-only chrome from the printout */
+      .refresh-btn, #hamburger, .expand-hint, .game-controls, .nn-log-row { display:none !important; }
+      /* keep each card / panel whole instead of splitting across page breaks */
+      .game-card, .best-bets, .tr-wrap, .consensus-block { break-inside:avoid; page-break-inside:avoid; }
+    }
   </style>
 </head>
 <body>
