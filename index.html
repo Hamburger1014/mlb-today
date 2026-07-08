@@ -611,7 +611,10 @@ async function fetchWCKalshi(){
   for(const et in byEv){
     const arr=byEv[et]; let draw=null, drawAsk=null; const teams={}, teamsAsk={};
     for(const m of arr){
-      const sub=(m.yes_sub_title||'').trim(); const mid=midYes(m);
+      // Kalshi prefixes knockout-stage outcomes with "Reg Time:" (e.g. "Reg Time:
+      // Tie", "Reg Time: Spain") to mark the 90-minute result — strip it so tie
+      // detection and team-name matching work in the knockout rounds too.
+      const sub=(m.yes_sub_title||'').replace(/^\s*reg(?:ulation)?\s*time\s*:?\s*/i,'').trim(); const mid=midYes(m);
       if(mid==null) continue;
       const ask=parseFloat(m.yes_ask_dollars); const askV=(!isNaN(ask)&&ask>0)?ask:null;
       if(/^tie$/i.test(sub)){ draw=mid; drawAsk=askV; } else { teams[wcCanon(sub)]=mid; teamsAsk[wcCanon(sub)]=askV; }
