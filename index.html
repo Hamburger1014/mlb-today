@@ -521,7 +521,7 @@
 
 <!-- ── WNBA VIEW ── -->
 <div id="wnba-view" style="display:none">
-  <div class="wc-intro">🏀 <b>WNBA Today</b> · Quarter-by-quarter predictions vs <b>Kalshi's Q1–Q4 markets</b> · Model: regressions trained walk-forward on <b>1,177 real WNBA games 2022–2026</b> (65.0% game winners vs 55.1% home baseline; 78% on ≥70%-confidence picks; quarter 3-way 52–56%) · Kalshi prices fall back to a 30-min GitHub-Action snapshot when live calls are blocked. Not financial advice — edges under ~4¢ rarely clear Kalshi fees.</div>
+  <div class="wc-intro">🏀 <b>WNBA Today</b> · Quarter-by-quarter predictions + <b>EV vs the DraftKings moneyline</b> (Kalshi Q1–Q4 markets as reference) · Model v2 trained walk-forward on <b>1,246 real WNBA games 2022–2026</b>: recency-weighted ratings, prior-season carry, fitted injury penalty from ESPN's injury report — <b>67.3% game winners</b> (base 54.3%; 80.5% on ≥70%-confidence picks) · Not financial advice — EV under ~3% is noise.</div>
   <main>
     <div id="wnba-status" role="status" aria-live="polite" style="text-align:center;padding:30px;color:var(--dim)">Loading WNBA games…</div>
     <div id="wnba-track-bar" style="display:none"></div>
@@ -3430,24 +3430,30 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape'){ const m=document
 window.WNBA=(function(){
 const W_ESPN='https://site.api.espn.com/apis/site/v2/sports/basketball/wnba';
 const W_STAND='https://site.api.espn.com/apis/v2/sports/basketball/wnba/standings';
+// v2: recency-weighted ratings (25-game half-life) + prior-season carry +
+// fitted injury penalty. Walk-forward on 1,246 games: 67.3% winners
+// (base 54.3%), 80.5% on p>=70% picks. See wnba_model/ in repo to retrain.
 const FIT={
-  shrinkK:8, lgFallback:83.0,
-  total:{scale:1.0014,intercept:0.72,b2b:0.297},
-  margin:{scale:1.0290,homeEdge:2.058,b2b:-1.146,sd:12.44},
-  winProbK:0.14115,
+  halfLife:25, priorW0:4, priorR:0.6, shrinkK:8, lgFallback:83.0,
+  margin:{eff:1.0993,homeEdge:1.855,b2b:-0.956,injMiss:-0.1793,sd:12.33},
+  total:{eff:1.1584,intercept:-24.42,b2b:0.645,injMiss:-0.0633},
+  winProbK:0.1461,
   quarters:[
-    {shareH:0.2566,shareA:0.2553,slope:0.2693,intercept: 0.084,sd:7.58,tieBand:0.456},
-    {shareH:0.2504,shareA:0.2474,slope:0.3117,intercept: 0.105,sd:7.08,tieBand:0.526},
-    {shareH:0.2493,shareA:0.2545,slope:0.2997,intercept:-0.528,sd:7.12,tieBand:0.447},
-    {shareH:0.2437,shareA:0.2428,slope:0.1193,intercept: 0.339,sd:7.05,tieBand:0.485},
+    {shareH:0.2573,shareA:0.2550,slope:0.2510,intercept: 0.200,sd:7.57,tieBand:0.477},
+    {shareH:0.2504,shareA:0.2477,slope:0.3228,intercept: 0.078,sd:7.11,tieBand:0.539},
+    {shareH:0.2492,shareA:0.2548,slope:0.2919,intercept:-0.543,sd:7.07,tieBand:0.479},
+    {shareH:0.2431,shareA:0.2424,slope:0.1343,intercept: 0.265,sd:7.11,tieBand:0.477},
   ],
+  priors2025:{WSH:[76.07,82.01],ATL:[83.54,75.99],DAL:[81.55,88.44],MIN:[84.64,77.11],
+    GS:[76.8,76.41],LA:[85.4,87.95],NY:[81.14,79.83],LV:[85.66,80.5],IND:[83.2,80.85],
+    CHI:[75.42,85.43],PHX:[82.07,80.68],SEA:[81.49,80.64],CON:[76.27,85.08]},
 };
 const KALSHI_CITY={'Atlanta':'ATL','Chicago':'CHI','Connecticut':'CON','Dallas':'DAL',
   'Golden State':'GS','Indiana':'IND','Las Vegas':'LV','Los Angeles':'LA','Minnesota':'MIN',
   'New York':'NY','Phoenix':'PHX','Portland':'POR','Seattle':'SEA','Toronto':'TOR','Washington':'WSH'};
 const QTR_SERIES=['KXWNBA1QWINNER','KXWNBA2QWINNER','KXWNBA3QWINNER','KXWNBA4QWINNER'];
 
-let teamStats={}, lgAvgPts=83, b2bTeams=new Set();
+let teamStats={}, lgAvgPts=83, b2bTeams=new Set(), injInfo={}, teamIds={}, teamNameToAbbr={};
 
 function erf(x){const s=x<0?-1:1;x=Math.abs(x);const t=1/(1+0.3275911*x);
   const y=1-(((((1.061405429*t-1.453152027)*t)+1.421413741)*t-0.284496736)*t+0.254829592)*t*Math.exp(-x*x);return s*y;}
@@ -3460,12 +3466,16 @@ function wPct(p,d=0){return p!=null?(p*100).toFixed(d)+'%':'—';}
 function predictGame(homeAbbr,awayAbbr){
   const h=teamStats[homeAbbr],a=teamStats[awayAbbr];
   if(!h||!a) return null;
-  const hPF=wShrink(h.pf,h.gp,lgAvgPts),hPA=wShrink(h.pa,h.gp,lgAvgPts);
-  const aPF=wShrink(a.pf,a.gp,lgAvgPts),aPA=wShrink(a.pa,a.gp,lgAvgPts);
+  const hPF=wShrink(h.pf,h.wN,lgAvgPts),hPA=wShrink(h.pa,h.wN,lgAvgPts);
+  const aPF=wShrink(a.pf,a.wN,lgAvgPts),aPA=wShrink(a.pa,a.wN,lgAvgPts);
   const eH0=hPF*aPA/lgAvgPts,eA0=aPF*hPA/lgAvgPts;
   const b2bH=b2bTeams.has(homeAbbr)?1:0,b2bA=b2bTeams.has(awayAbbr)?1:0;
-  const T=FIT.total.scale*(eH0+eA0)+FIT.total.intercept+FIT.total.b2b*(b2bH+b2bA);
-  const mu=FIT.margin.scale*(eH0-eA0)+FIT.margin.homeEdge+FIT.margin.b2b*(b2bH-b2bA);
+  const missH=(injInfo[homeAbbr]&&injInfo[homeAbbr].miss)||0;
+  const missA=(injInfo[awayAbbr]&&injInfo[awayAbbr].miss)||0;
+  const T=FIT.total.eff*(eH0+eA0)+FIT.total.intercept
+        +FIT.total.b2b*(b2bH+b2bA)+FIT.total.injMiss*(missH+missA);
+  const mu=FIT.margin.eff*(eH0-eA0)+FIT.margin.homeEdge
+        +FIT.margin.b2b*(b2bH-b2bA)+FIT.margin.injMiss*(missH-missA);
   const expH=(T+mu)/2,expA=(T-mu)/2;
   const pHomeGame=wClamp(wSigmoid(FIT.winProbK*mu),0.03,0.97);
   const quarters=FIT.quarters.map(q=>{
@@ -3475,8 +3485,22 @@ function predictGame(homeAbbr,awayAbbr){
     const pHome=1-normCdf(q.tieBand,qmu,q.sd);
     return {h:qh,a:qa,pHome,pAway,pTie:wClamp(1-pHome-pAway,0,1)};
   });
-  return {expH,expA,mu,pHomeGame,quarters};
+  return {expH,expA,mu,pHomeGame,quarters,missH,missA};
 }
+
+// Vegas EV: model prob vs RAW implied prob of the actual moneyline (vig included)
+function mlPayout(ml){ return ml>0?ml/100:100/Math.abs(ml); }
+function vegasEV(p,ml){ if(p==null||ml==null) return null; const b=mlPayout(ml); return p*b-(1-p); }
+function bestVegasBet(model,g){
+  if(!model||!g.inlineOdds||g.inlineOdds.homeML==null) return null;
+  const sides=[
+    {side:g.homeAbbr,p:model.pHomeGame,ml:g.inlineOdds.homeML},
+    {side:g.awayAbbr,p:1-model.pHomeGame,ml:g.inlineOdds.awayML},
+  ].map(s=>({...s,ev:vegasEV(s.p,s.ml)}));
+  sides.sort((x,y)=>y.ev-x.ev);
+  return sides[0];
+}
+function fmtML(ml){ return ml==null?'—':(ml>0?'+'+ml:String(ml)); }
 
 async function espnFetch(url){
   const r=await fetch(url,{headers:{'Accept':'application/json'}});
@@ -3503,7 +3527,7 @@ function parseEvent(evt){
     }
     if(hML!=null&&aML!=null){
       const hR=mlToRawProb(hML),aR=mlToRawProb(aML);
-      if(hR&&aR){const t=hR+aR;inlineOdds={homeP:hR/t,awayP:aR/t,provider:(o.provider&&o.provider.name)||'Vegas',overUnder:o.overUnder};break;}
+      if(hR&&aR){const t=hR+aR;inlineOdds={homeP:hR/t,awayP:aR/t,homeML:hML,awayML:aML,provider:(o.provider&&o.provider.name)||'Vegas',overUnder:o.overUnder};break;}
     }
   }
   const lines=c=>(c.linescores||[]).map(ls=>+ls.value);
@@ -3527,22 +3551,101 @@ async function fetchScoreboard(ymd){
   const d=await espnFetch(ymd?`${W_ESPN}/scoreboard?dates=${ymd}`:`${W_ESPN}/scoreboard`);
   return (d.events||[]).map(parseEvent).filter(Boolean);
 }
+// Recency-weighted ratings from game logs (fitted 25-game half-life),
+// seeded with regressed prior-season ratings.
+// Static team map: ESPN's /teams endpoint is the ONLY one without CORS
+// headers, so ids are baked in (stable; extend when the league expands).
+const WNBA_TEAMS={
+  ATL:{id:'20',name:'Atlanta Dream'},CHI:{id:'19',name:'Chicago Sky'},
+  CON:{id:'18',name:'Connecticut Sun'},DAL:{id:'3',name:'Dallas Wings'},
+  GS:{id:'129689',name:'Golden State Valkyries'},IND:{id:'5',name:'Indiana Fever'},
+  LV:{id:'17',name:'Las Vegas Aces'},LA:{id:'6',name:'Los Angeles Sparks'},
+  MIN:{id:'8',name:'Minnesota Lynx'},NY:{id:'9',name:'New York Liberty'},
+  PHX:{id:'11',name:'Phoenix Mercury'},POR:{id:'132052',name:'Portland Fire'},
+  SEA:{id:'14',name:'Seattle Storm'},TOR:{id:'131935',name:'Toronto Tempo'},
+  WSH:{id:'16',name:'Washington Mystics'},
+};
 async function loadTeamStats(){
-  const d=await espnFetch(W_STAND);
-  teamStats={};
-  const entries=[];
-  for(const grp of d.children||[]) entries.push(...((grp.standings&&grp.standings.entries)||[]));
-  if(!entries.length&&d.standings&&d.standings.entries) entries.push(...d.standings.entries);
-  let pfSum=0,n=0;
-  for(const e of entries){
-    const abbr=e.team&&e.team.abbreviation; if(!abbr) continue;
-    const s={}; for(const st of e.stats||[]) s[st.name]=st.value;
-    const wins=s.wins||0,losses=s.losses||0;
-    const pf=s.avgPointsFor||lgAvgPts,pa=s.avgPointsAgainst||lgAvgPts;
-    teamStats[abbr]={wins,losses,gp:wins+losses,pf,pa};
-    pfSum+=pf;n++;
-  }
-  if(n) lgAvgPts=pfSum/n;
+  const lam=Math.pow(0.5,1/FIT.halfLife);
+  const teams=Object.entries(WNBA_TEAMS).map(([abbr,v])=>({abbreviation:abbr,id:v.id,displayName:v.name}));
+  teamStats={}; teamIds={}; teamNameToAbbr={};
+  await Promise.all(teams.map(async t=>{
+    teamIds[t.abbreviation]=t.id;
+    teamNameToAbbr[t.displayName]=t.abbreviation;
+    let wPF=0,wPA=0,wN=0,wins=0,losses=0,gp=0;
+    const pr=FIT.priors2025[t.abbreviation];
+    if(pr){
+      wPF=(FIT.priorR*pr[0]+(1-FIT.priorR)*FIT.lgFallback)*FIT.priorW0;
+      wPA=(FIT.priorR*pr[1]+(1-FIT.priorR)*FIT.lgFallback)*FIT.priorW0;
+      wN=FIT.priorW0;
+    }
+    try{
+      const d=await espnFetch(`${W_ESPN}/teams/${t.id}/schedule`);
+      const done=[];
+      for(const ev of d.events||[]){
+        const stype=(ev.seasonType&&ev.seasonType.type)||ev.seasonType;
+        if(stype!=null&&stype!==2&&stype!==3) continue;
+        const c=ev.competitions&&ev.competitions[0]; if(!c) continue;
+        const me=(c.competitors||[]).find(x=>x.team&&String(x.team.id)===String(t.id));
+        const opp=(c.competitors||[]).find(x=>x!==me&&x.team);
+        if(!me||!opp) continue;
+        const sc=x=>{const s=x.score;if(s==null)return null;const v=(typeof s==='object')?s.value:parseFloat(s);return (v==null||isNaN(v))?null:v;};
+        const my=sc(me),op=sc(opp);
+        if(my==null||op==null||(my===0&&op===0)) continue;
+        done.push({d:ev.date,my,op,won:me.winner===true});
+      }
+      done.sort((x,y)=>new Date(x.d)-new Date(y.d));
+      for(const gm of done){
+        wPF=wPF*lam+gm.my; wPA=wPA*lam+gm.op; wN=wN*lam+1;
+        if(gm.won)wins++;else losses++;
+      }
+      gp=done.length;
+    }catch(e){}
+    teamStats[t.abbreviation]={wins,losses,gp,
+      pf:wN>0?wPF/wN:FIT.lgFallback, pa:wN>0?wPA/wN:FIT.lgFallback, wN};
+  }));
+  const vals=Object.values(teamStats).filter(x=>x.gp>0);
+  if(vals.length) lgAvgPts=vals.reduce((s,x)=>s+x.pf,0)/vals.length;
+}
+
+// Injury adjustment: sum PPG of OUT regulars (>=50% of games, >=3 GP, >=6 PPG;
+// long-term absences are already priced into the decayed ratings).
+async function loadInjuries(teamsPlaying){
+  injInfo={};
+  let injData;
+  try{ injData=await espnFetch(`${W_ESPN}/injuries`); }catch(e){ return; }
+  const year=new Date().getFullYear();
+  await Promise.all((injData.injuries||[]).map(async team=>{
+    const abbr=teamNameToAbbr[team.displayName];
+    if(!abbr||!teamsPlaying.has(abbr)||!teamIds[abbr]) return;
+    const outNames=(team.injuries||[]).filter(i=>/^out$/i.test(i.status||''))
+      .map(i=>i.athlete&&i.athlete.displayName).filter(Boolean);
+    if(!outNames.length) return;
+    let roster;
+    try{ roster=await espnFetch(`${W_ESPN}/teams/${teamIds[abbr]}/roster`); }catch(e){ return; }
+    const idByName={};
+    for(const a of roster.athletes||[]) idByName[a.displayName]=a.id;
+    const teamGp=(teamStats[abbr]&&teamStats[abbr].gp)||0;
+    const entry={miss:0,names:[]};
+    await Promise.all(outNames.map(async nm=>{
+      const aid=idByName[nm]; if(!aid) return;
+      try{
+        const r=await fetch(`https://sports.core.api.espn.com/v2/sports/basketball/leagues/wnba/seasons/${year}/types/2/athletes/${aid}/statistics`);
+        if(!r.ok) return;
+        const sd=await r.json();
+        let ppg=null,gpP=null;
+        for(const cat of (sd.splits&&sd.splits.categories)||[]){
+          for(const st of cat.stats||[]){
+            if(st.name==='avgPoints') ppg=st.value;
+            if(st.name==='gamesPlayed'&&cat.name==='general') gpP=st.value;
+          }
+        }
+        if(ppg==null||gpP==null||teamGp<4) return;
+        if(gpP>=3&&gpP/teamGp>=0.5&&ppg>=6){ entry.miss+=ppg; entry.names.push({name:nm,ppg}); }
+      }catch(e){}
+    }));
+    if(entry.miss>0){ entry.miss=Math.min(entry.miss,30); injInfo[abbr]=entry; }
+  }));
 }
 async function loadB2B(){
   b2bTeams=new Set();
@@ -3660,6 +3763,8 @@ function logPrediction(g,model,kGame,kQtrs){
       q:model.quarters.map(q=>({h:+q.pHome.toFixed(4),t:+q.pTie.toFixed(4),a:+q.pAway.toFixed(4)}))},
     kalshi:{game:kGame?+kGame.homeP.toFixed(4):null,
       q:kQtrs.map(k=>k?{h:+k.h.toFixed(4),t:+k.t.toFixed(4),a:+k.a.toFixed(4)}:null)},
+    vegas:(g.inlineOdds&&g.inlineOdds.homeML!=null)
+      ?{homeML:g.inlineOdds.homeML,awayML:g.inlineOdds.awayML}:null,
     result:null,
   });
   saveLog();
@@ -3684,12 +3789,25 @@ async function resolveLog(){
 function trackStats(){
   const done=predLog.filter(e=>e.result);
   if(!done.length) return null;
-  let gN=0,gHit=0,qN=0,qHit=0,vN=0,vHit=0;
+  let gN=0,gHit=0,qN=0,qHit=0,vN=0,vHit=0,vgN=0,vgHit=0,vgROI=0;
   for(const e of done){
     gN++; if((e.model.game>=0.5)===!!e.result.homeWon) gHit++;
     if(e.kalshi.game!=null&&Math.abs(e.model.game-e.kalshi.game)>=0.05){
       vN++;
       if((e.model.game>e.kalshi.game)===!!e.result.homeWon) vHit++;
+    }
+    if(e.vegas&&e.vegas.homeML!=null){
+      const sides=[[e.model.game,e.vegas.homeML,1],[1-e.model.game,e.vegas.awayML,0]];
+      let best=null;
+      for(const [p,ml,isHome] of sides){
+        const ev=vegasEV(p,ml);
+        if(best==null||ev>best.ev) best={ev,ml,isHome};
+      }
+      if(best.ev>=0.03){
+        vgN++;
+        const won=(best.isHome===1)===!!e.result.homeWon;
+        if(won){ vgHit++; vgROI+=mlPayout(best.ml); } else vgROI-=1;
+      }
     }
     for(let i=0;i<4;i++){
       const q=e.model.q[i],rh=e.result.qHome&&e.result.qHome[i],ra=e.result.qAway&&e.result.qAway[i];
@@ -3700,7 +3818,7 @@ function trackStats(){
       if(pick===actual) qHit++;
     }
   }
-  return {gN,gHit,qN,qHit,vN,vHit};
+  return {gN,gHit,qN,qHit,vN,vHit,vgN,vgHit,vgROI};
 }
 function renderTrackBar(){
   const el=document.getElementById('wnba-track-bar');
@@ -3713,7 +3831,8 @@ function renderTrackBar(){
     const pct=(h,n)=>n?` <span class="${h/n>=0.5?'track-good':'track-bad'}">${Math.round(h/n*100)}%</span>`:'';
     html+=`<span class="track-stat">Game picks: <b>${s.gHit}/${s.gN}</b>${pct(s.gHit,s.gN)}</span>`;
     html+=`<span class="track-stat">Quarter picks: <b>${s.qHit}/${s.qN}</b>${pct(s.qHit,s.qN)}</span>`;
-    if(s.vN) html+=`<span class="track-stat">Value bets (≥5¢): <b>${s.vHit}/${s.vN}</b>${pct(s.vHit,s.vN)}</span>`;
+    if(s.vgN) html+=`<span class="track-stat">Vegas value bets (≥3% EV): <b>${s.vgHit}/${s.vgN}</b> · ROI <b class="${s.vgROI>=0?'track-good':'track-bad'}">${s.vgROI>=0?'+':''}${(s.vgROI/s.vgN*100).toFixed(0)}%</b></span>`;
+    if(s.vN) html+=`<span class="track-stat">vs Kalshi (≥5¢): <b>${s.vHit}/${s.vN}</b>${pct(s.vHit,s.vN)}</span>`;
   }
   if(pending) html+=`<span class="track-stat" style="color:var(--dim2)">${pending} pending</span>`;
   html+=`<button class="track-export" onclick="WNBA.exportLog()">Export JSON</button>`;
@@ -3745,6 +3864,9 @@ function renderGame(g,model,kGame,kQtrs){
     :'<span class="mkt-status-badge badge-no-mkt">no market</span>';
   const b2bA=b2bTeams.has(g.awayAbbr)?'<span class="b2b-chip">B2B</span>':'';
   const b2bH=b2bTeams.has(g.homeAbbr)?'<span class="b2b-chip">B2B</span>':'';
+  const injA=injInfo[g.awayAbbr], injH=injInfo[g.homeAbbr];
+  const injChip=inj=>inj?`<span class="b2b-chip" title="${inj.names.map(n=>`${n.name} (${n.ppg.toFixed(1)} ppg)`).join(', ')}">🩹 −${inj.miss.toFixed(0)}</span>`:'';
+  const injChipA=injChip(injA), injChipH=injChip(injH);
 
   let consensusHtml='';
   let pHome=model?model.pHomeGame:null;
@@ -3781,7 +3903,7 @@ function renderGame(g,model,kGame,kQtrs){
   }
   const sourcesHtml=`<div class="sources-panel">
     ${srcRow('src-model','🧠 Model',model?model.pHomeGame:null,model?`margin ${model.mu>0?'+':''}${model.mu.toFixed(1)}`:'')}
-    ${srcRow('src-vegas','💰 Vegas',vegasP,g.inlineOdds?g.inlineOdds.provider:'')}
+    ${srcRow('src-vegas','💰 Vegas',vegasP,g.inlineOdds?`${g.inlineOdds.provider}${g.inlineOdds.awayML!=null?` ${fmtML(g.inlineOdds.awayML)}/${fmtML(g.inlineOdds.homeML)}`:''}`:'')}
     ${srcRow('src-kalshi','📈 Kalshi',kGame?kGame.homeP:null,kGame?'mid, de-vigged':'')}
   </div>`;
 
@@ -3832,13 +3954,20 @@ function renderGame(g,model,kGame,kQtrs){
     </div>`;
   }
 
+  const vBet=bestVegasBet(model,g);
   const gameEdge=(kGame&&model)?model.pHomeGame-kGame.homeP:null;
-  let edgeBadge='<span class="edge-badge edge-neu">No Kalshi market</span>';
-  if(gameEdge!=null){
+  let edgeBadge;
+  if(vBet){
+    const evPct=(vBet.ev*100).toFixed(1);
+    edgeBadge=vBet.ev>=0.05?`<span class="edge-badge edge-pos">VALUE vs Vegas: ${vBet.side} ${fmtML(vBet.ml)} → +${evPct}% EV</span>`
+      :vBet.ev>=0.02?`<span class="edge-badge edge-neu">${vBet.side} ${fmtML(vBet.ml)} → +${evPct}% EV (thin)</span>`
+      :'<span class="edge-badge edge-neu">No +EV side vs Vegas</span>';
+  }else if(gameEdge!=null){
     const abs=Math.abs(gameEdge),side=gameEdge>0?g.homeAbbr:g.awayAbbr;
-    edgeBadge=abs>=0.05?`<span class="edge-badge edge-pos">VALUE: ${side} +${(abs*100).toFixed(1)}¢ vs market</span>`
-      :abs>=0.03?`<span class="edge-badge edge-neu">${side} +${(abs*100).toFixed(1)}¢ (below fee threshold)</span>`
+    edgeBadge=abs>=0.05?`<span class="edge-badge edge-pos">vs Kalshi: ${side} +${(abs*100).toFixed(1)}¢</span>`
       :'<span class="edge-badge edge-neu">Model agrees with market</span>';
+  }else{
+    edgeBadge='<span class="edge-badge edge-neu">No market lines yet</span>';
   }
 
   const h=teamStats[g.homeAbbr]||{},a=teamStats[g.awayAbbr]||{};
@@ -3853,9 +3982,11 @@ function renderGame(g,model,kGame,kQtrs){
       </div>
       <div class="detail-stat">
         <h4>Model Inputs (fitted on 1,177 games)</h4>
-        <div class="kd-row"><span>Home edge</span><span>+${FIT.margin.homeEdge.toFixed(1)} pts margin</span></div>
+        <div class="kd-row"><span>Home edge (fitted)</span><span>+${FIT.margin.homeEdge.toFixed(1)} pts margin</span></div>
         <div class="kd-row"><span>${g.awayAbbr} back-to-back</span><span>${b2bTeams.has(g.awayAbbr)?`yes (${FIT.margin.b2b} margin)`:'no'}</span></div>
         <div class="kd-row"><span>${g.homeAbbr} back-to-back</span><span>${b2bTeams.has(g.homeAbbr)?`yes (${FIT.margin.b2b} margin)`:'no'}</span></div>
+        <div class="kd-row"><span>${g.awayAbbr} key scorers out</span><span>${injA?`${injA.names.map(n=>n.name).join(', ')} (−${injA.miss.toFixed(1)} ppg)`:'none material'}</span></div>
+        <div class="kd-row"><span>${g.homeAbbr} key scorers out</span><span>${injH?`${injH.names.map(n=>n.name).join(', ')} (−${injH.miss.toFixed(1)} ppg)`:'none material'}</span></div>
         <div class="kd-row"><span>Expected margin</span><span>${model?(model.mu>0?g.homeAbbr:g.awayAbbr)+' by '+Math.abs(model.mu).toFixed(1):'—'}</span></div>
         <div class="kd-row"><span>Projected total</span><span>${model?(model.expH+model.expA).toFixed(0):'—'}${g.inlineOdds&&g.inlineOdds.overUnder?` (Vegas O/U ${g.inlineOdds.overUnder})`:''}</span></div>
       </div>
@@ -3881,7 +4012,7 @@ function renderGame(g,model,kGame,kQtrs){
           ${g.awayLogo?`<img class="team-logo" src="${g.awayLogo}" alt=""/>`:''}
           <span class="team-name">${g.awayName}</span>
         </div>
-        <span class="team-record">${g.awayRec} ${b2bA}</span>
+        <span class="team-record">${g.awayRec} ${b2bA}${injChipA}</span>
       </div>
       <div class="game-center">
         <span class="game-time">${g.isFinal||g.isLive?`${g.awayScore}–${g.homeScore}`:wTime(g.gameDate)}</span>
@@ -3893,7 +4024,7 @@ function renderGame(g,model,kGame,kQtrs){
           ${g.homeLogo?`<img class="team-logo" src="${g.homeLogo}" alt=""/>`:''}
           <span class="team-name">${g.homeName}</span>
         </div>
-        <span class="team-record">${g.homeRec} ${b2bH}</span>
+        <span class="team-record">${g.homeRec} ${b2bH}${injChipH}</span>
       </div>
     </div>
     ${consensusHtml}
@@ -3919,9 +4050,10 @@ async function load(){
   let games=[];
   try{ games=await fetchScoreboard(); }
   catch(e){ status.textContent='⚠️ Could not reach ESPN ('+e.message+'). Refresh to retry.'; return; }
-  status.textContent='Loading team stats & markets…';
+  status.textContent='Building ratings, checking injuries & markets…';
   try{ await loadTeamStats(); }catch(e){}
-  const [,,kalshi]=await Promise.all([loadB2B(),resolveLog(),fetchKalshi()]);
+  const teamsPlaying=new Set(games.flatMap(g=>[g.homeAbbr,g.awayAbbr]));
+  const [,,kalshi]=await Promise.all([loadB2B(),resolveLog(),fetchKalshi(),loadInjuries(teamsPlaying)]);
   status.style.display='none';
   document.getElementById('wnba-games-hdr').style.display='flex';
   document.getElementById('wnba-badge-count').textContent=`${games.length} game${games.length!==1?'s':''}`;
