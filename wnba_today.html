@@ -1,0 +1,958 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>WNBA Today — Quarter-by-Quarter Predictions vs Market</title>
+  <style>
+    :root {
+      --bg:#07131f; --card:#0f2035; --card2:#152a40; --card3:#1a3050;
+      --border:#1e3a55; --border2:#254a6a;
+      --text:#dce9f5; --dim:#7a99b5; --dim2:#4a6a85;
+      --gold:#e8c84b; --green:#22c55e; --red:#e8174d;
+      --blue:#3a8ae8; --blue2:#1a5fbd; --purple:#a855f7;
+      --orange:#f97316; --teal:#14b8a6;
+      --navy:#0c2340;
+    }
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+
+    /* ── Header ── */
+    header{
+      background:linear-gradient(135deg,var(--navy) 0%,#091828 100%);
+      border-bottom:2px solid var(--border2);
+      padding:14px 24px;
+      display:flex;align-items:center;justify-content:space-between;
+      position:sticky;top:0;z-index:100;
+    }
+    .hdr-left{display:flex;align-items:center;gap:12px}
+    .hdr-logo{font-size:1.6rem}
+    .hdr-title{font-size:1.15rem;font-weight:800;letter-spacing:.02em}
+    .hdr-date{font-size:.78rem;color:var(--dim);margin-top:1px}
+    .hdr-right{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+    .refresh-btn{
+      background:var(--card2);border:1px solid var(--border2);color:var(--text);
+      padding:6px 12px;border-radius:8px;font-size:.8rem;cursor:pointer;
+      display:flex;align-items:center;gap:5px;transition:background .2s;
+    }
+    .refresh-btn:hover{background:var(--card3)}
+    .hdr-badge{font-size:.72rem;padding:4px 9px;border-radius:6px;font-weight:700;letter-spacing:.04em}
+    .badge-espn{background:rgba(232,122,23,.15);border:1px solid rgba(232,122,23,.35);color:#fb923c}
+    .badge-kalshi{background:rgba(168,85,247,.15);border:1px solid rgba(168,85,247,.35);color:#c084fc}
+
+    /* ── Legend ── */
+    .legend{
+      display:flex;align-items:center;gap:16px;flex-wrap:wrap;
+      padding:8px 24px;
+      background:#0b1d2e;border-bottom:1px solid var(--border);
+      font-size:.76rem;color:var(--dim);
+    }
+    .legend-item{display:flex;align-items:center;gap:5px}
+    .dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+
+    /* ── Main ── */
+    main{max-width:1000px;margin:0 auto;padding:20px 16px;display:flex;flex-direction:column;gap:14px}
+
+    /* ── Status ── */
+    #status-banner{
+      background:var(--card);border:1px solid var(--border);border-radius:10px;
+      padding:14px 18px;display:flex;align-items:center;gap:12px;font-size:.88rem;
+    }
+    .spinner{width:18px;height:18px;border:2px solid var(--border2);
+      border-top-color:var(--gold);border-radius:50%;animation:spin .8s linear infinite;flex-shrink:0}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    .status-steps{display:flex;flex-direction:column;gap:2px}
+    .status-step{font-size:.78rem;color:var(--dim)}
+    .status-step.active{color:var(--text)}
+    .status-step.done{color:var(--green)}
+
+    /* ── Track record bar ── */
+    #track-bar{
+      background:rgba(56,189,248,.05);border:1px solid var(--border);border-radius:10px;
+      padding:10px 16px;font-size:.78rem;color:var(--dim);
+      display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+    }
+    .track-stat{display:flex;align-items:center;gap:5px}
+    .track-stat b{color:var(--text)}
+    .track-good{color:var(--green);font-weight:700}
+    .track-bad{color:#f87171;font-weight:700}
+    .track-export{margin-left:auto;background:var(--card3);border:1px solid var(--border2);color:var(--text);
+      padding:3px 10px;border-radius:6px;font-size:.72rem;cursor:pointer}
+    .track-export:hover{border-color:var(--blue)}
+
+    /* ── Section header ── */
+    .section-hdr{
+      display:flex;align-items:center;justify-content:space-between;
+      font-size:.73rem;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);
+      padding:0 2px;
+    }
+    .section-badges{display:flex;gap:6px}
+    .sc-badge{background:var(--card2);border:1px solid var(--border);border-radius:12px;padding:2px 10px;font-size:.7rem}
+
+    /* ── Game card ── */
+    .game-card{
+      background:var(--card);border:1px solid var(--border);border-radius:14px;
+      overflow:hidden;transition:border-color .2s;
+    }
+    .game-card:hover{border-color:var(--border2)}
+    .game-card.expanded{border-color:var(--blue2)}
+    .card-header{
+      display:grid;grid-template-columns:1fr auto 1fr;
+      align-items:center;padding:14px 16px 12px;gap:10px;
+      cursor:pointer;
+    }
+    .team-side{display:flex;flex-direction:column;gap:4px}
+    .team-side.away{align-items:flex-start}
+    .team-side.home{align-items:flex-end}
+    .team-logo-name{display:flex;align-items:center;gap:7px}
+    .team-side.home .team-logo-name{flex-direction:row-reverse}
+    .team-logo{width:32px;height:32px;object-fit:contain}
+    .team-name{font-size:.92rem;font-weight:700}
+    .team-record{font-size:.72rem;color:var(--dim)}
+    .game-center{display:flex;flex-direction:column;align-items:center;gap:3px;min-width:68px}
+    .game-time{font-size:.72rem;color:var(--dim);text-align:center}
+    .at-badge{font-size:.72rem;font-weight:700;color:var(--dim2);background:var(--card2);border:1px solid var(--border);border-radius:5px;padding:2px 7px}
+    .mkt-status-badge{font-size:.62rem;padding:2px 6px;border-radius:8px;font-weight:600;margin-top:1px}
+    .badge-live-mkt{background:rgba(168,85,247,.2);color:#c084fc;border:1px solid rgba(168,85,247,.35)}
+    .badge-no-mkt{background:rgba(100,120,140,.1);color:var(--dim2);border:1px solid rgba(100,120,140,.2)}
+    .badge-live-game{background:rgba(34,197,94,.15);color:var(--green);border:1px solid rgba(34,197,94,.3)}
+    .badge-final{background:rgba(138,155,176,.12);color:var(--dim);border:1px solid rgba(138,155,176,.25)}
+    .b2b-chip{font-size:.62rem;color:#fb923c;background:rgba(249,115,22,.1);border:1px solid rgba(249,115,22,.25);
+      border-radius:8px;padding:1px 6px;font-weight:600}
+
+    /* ── Consensus block ── */
+    .consensus-block{
+      margin:10px 16px 0;
+      background:linear-gradient(135deg,#0d2845 0%,#0a1f35 100%);
+      border:1px solid #2a5090;border-radius:10px;padding:12px 14px 10px;
+    }
+    .consensus-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+    .consensus-title{font-size:.67rem;font-weight:800;text-transform:uppercase;letter-spacing:.1em;color:#60a5fa;
+      display:flex;align-items:center;gap:5px}
+    .consensus-pick{font-size:.73rem;font-weight:800;padding:3px 10px;border-radius:10px}
+    .cp-home{background:rgba(58,138,232,.15);color:#60a5fa;border:1px solid rgba(58,138,232,.3)}
+    .cp-away{background:rgba(232,23,77,.12);color:#f87171;border:1px solid rgba(232,23,77,.25)}
+    .cp-even{background:rgba(138,155,176,.1);color:var(--dim);border:1px solid rgba(138,155,176,.2)}
+    .consensus-bar-row{display:grid;grid-template-columns:46px 1fr 46px;align-items:center;gap:8px}
+    .cb-abbr{font-size:.82rem;font-weight:800}
+    .cb-abbr.away{color:var(--red);text-align:left}
+    .cb-abbr.home{color:var(--blue);text-align:right}
+    .consensus-bar-track{height:11px;border-radius:6px;background:var(--card2);overflow:hidden;display:flex}
+    .cbar-away{height:100%;background:linear-gradient(90deg,#c0152a,#e8174d);transition:width 1s ease}
+    .cbar-home{height:100%;background:linear-gradient(90deg,#1a5fbd,#3a8ae8);flex:1}
+    .consensus-vals{display:flex;justify-content:space-between;margin-top:3px}
+    .cv{font-size:.85rem;font-weight:800}
+    .cv.away{color:#e8174d}
+    .cv.home{color:#3a8ae8}
+    .proj-score{font-size:.72rem;color:var(--dim);text-align:center;margin-top:5px}
+    .proj-score b{color:var(--gold)}
+
+    /* ── Sources panel ── */
+    .sources-panel{margin:8px 16px 0;background:var(--card2);border:1px solid var(--border);border-radius:10px;overflow:hidden}
+    .source-row{
+      display:grid;grid-template-columns:100px 44px 1fr 44px 72px;
+      align-items:center;gap:6px;padding:7px 12px;border-bottom:1px solid var(--border);
+    }
+    .source-row:last-child{border-bottom:none}
+    .src-label{font-size:.7rem;font-weight:700;display:flex;align-items:center;gap:4px}
+    .src-away{font-size:.73rem;font-weight:700;text-align:right}
+    .src-home{font-size:.73rem;font-weight:700;text-align:left}
+    .src-bar-track{height:4px;border-radius:2px;background:#0a1525;overflow:hidden;display:flex}
+    .src-bar-away{height:100%;transition:width .8s ease}
+    .src-bar-home{height:100%;flex:1}
+    .src-detail{font-size:.66rem;color:var(--dim2);text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .src-na{font-size:.68rem;color:var(--dim2);font-style:italic;grid-column:2/6;text-align:center;padding:2px 0}
+    .src-model .src-label{color:#60a5fa}
+    .src-model .src-bar-away{background:linear-gradient(90deg,#9b1c2e,#e8174d)}
+    .src-model .src-bar-home{background:linear-gradient(90deg,#1a5fbd,#3a8ae8)}
+    .src-model .src-away{color:#f87171}
+    .src-model .src-home{color:#60a5fa}
+    .src-vegas .src-label{color:#fbbf24}
+    .src-vegas .src-bar-away{background:linear-gradient(90deg,#92400e,#f59e0b)}
+    .src-vegas .src-bar-home{background:linear-gradient(90deg,#854d0e,#fbbf24)}
+    .src-vegas .src-away{color:#fbbf24}
+    .src-vegas .src-home{color:#fbbf24}
+    .src-kalshi .src-label{color:#c084fc}
+    .src-kalshi .src-bar-away{background:linear-gradient(90deg,#4c1d95,#7c3aed)}
+    .src-kalshi .src-bar-home{background:linear-gradient(90deg,#3b0764,#a855f7)}
+    .src-kalshi .src-away{color:#c084fc}
+    .src-kalshi .src-home{color:#c084fc}
+
+    /* ── Quarter grid ── */
+    .qtr-block{margin:10px 16px 0;background:var(--card2);border:1px solid var(--border);border-radius:10px;overflow:hidden}
+    .qtr-hdr{display:flex;align-items:center;justify-content:space-between;padding:8px 12px 6px}
+    .qtr-title{font-size:.67rem;font-weight:800;text-transform:uppercase;letter-spacing:.1em;color:var(--teal)}
+    .qtr-note{font-size:.64rem;color:var(--dim2)}
+    .qtr-scroll{overflow-x:auto}
+    .qtr-table{width:100%;border-collapse:collapse;font-size:.78rem;min-width:480px}
+    .qtr-table th{
+      font-size:.64rem;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);
+      padding:5px 8px;border-top:1px solid var(--border);border-bottom:1px solid var(--border);
+      background:#0e2338;font-weight:700;text-align:center;
+    }
+    .qtr-table th:first-child{text-align:left;padding-left:12px}
+    .qtr-table td{padding:5px 8px;text-align:center;border-bottom:1px solid #12263c}
+    .qtr-table td:first-child{text-align:left;padding-left:12px;font-weight:700;font-size:.7rem}
+    .qtr-table tr:last-child td{border-bottom:none}
+    .qt-away td:first-child{color:var(--red)}
+    .qt-home td:first-child{color:var(--blue)}
+    .qt-pred{color:var(--text);font-weight:600}
+    .qt-final-col{background:rgba(232,200,75,.05);font-weight:800;color:var(--gold)}
+    .qt-actual{font-size:.66rem;color:var(--green);display:block;margin-top:1px}
+    .qt-rowlbl{color:var(--dim)!important;font-weight:600!important}
+    .qt-mkt{color:#c084fc;font-weight:600}
+    .qt-model{color:#60a5fa;font-weight:600}
+    .qt-sub{font-size:.62rem;color:var(--dim2);display:block}
+    .qt-edge{font-size:.66rem;font-weight:700;padding:1px 6px;border-radius:8px;display:inline-block}
+    .qe-pos{background:rgba(34,197,94,.15);color:var(--green)}
+    .qe-neg{background:rgba(232,23,77,.12);color:#f87171}
+    .qe-neu{color:var(--dim2)}
+
+    /* ── Edge row ── */
+    .edge-row{
+      display:flex;align-items:center;justify-content:space-between;
+      padding:8px 16px;margin-top:8px;
+      background:var(--card2);border-top:1px solid var(--border);
+      cursor:pointer;
+    }
+    .edge-left{display:flex;align-items:center;gap:8px}
+    .edge-label{font-size:.7rem;color:var(--dim)}
+    .edge-badge{font-size:.73rem;font-weight:700;padding:3px 10px;border-radius:12px}
+    .edge-pos{background:rgba(34,197,94,.15);color:var(--green);border:1px solid rgba(34,197,94,.3)}
+    .edge-neg{background:rgba(232,23,77,.12);color:#f87171;border:1px solid rgba(232,23,77,.25)}
+    .edge-neu{background:rgba(138,155,176,.1);color:var(--dim);border:1px solid rgba(138,155,176,.2)}
+    .expand-hint{font-size:.7rem;color:var(--dim2)}
+
+    /* ── Expanded detail ── */
+    .card-detail{display:none;border-top:1px solid var(--border);padding:16px;background:#0b1d2e}
+    .game-card.expanded .card-detail{display:block}
+    .detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px}
+    .detail-stat{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:12px}
+    .detail-stat h4{font-size:.7rem;color:var(--dim);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px}
+    .stat-row{display:grid;grid-template-columns:1fr 110px 1fr;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid #111e2d;font-size:.8rem}
+    .stat-row:last-child{border-bottom:none}
+    .sr-away{text-align:left;font-weight:600}
+    .sr-home{text-align:right;font-weight:600}
+    .sr-lbl{text-align:center;color:var(--dim);font-size:.7rem}
+    .sr-better{color:var(--green)}
+    .kalshi-detail{background:var(--card);border:1px solid rgba(168,85,247,.25);border-radius:10px;padding:12px;margin-top:4px}
+    .kalshi-detail h4{color:#c084fc;font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px}
+    .kd-row{display:flex;justify-content:space-between;font-size:.8rem;padding:3px 0}
+    .kd-row span:first-child{color:var(--dim)}
+    .detail-cta{display:flex;align-items:center;gap:8px;margin-top:12px;padding-top:12px;border-top:1px solid var(--border);font-size:.78rem;color:var(--dim);flex-wrap:wrap}
+    .kalshi-link{background:rgba(168,85,247,.15);border:1px solid rgba(168,85,247,.3);color:#c084fc;padding:5px 12px;border-radius:8px;font-size:.78rem;font-weight:600;text-decoration:none;display:inline-flex;align-items:center;gap:4px}
+    .kalshi-link:hover{background:rgba(168,85,247,.25)}
+
+    .no-games{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:40px;text-align:center;color:var(--dim)}
+    footer{text-align:center;padding:18px;font-size:.73rem;color:var(--dim2);line-height:1.5}
+
+    @media(max-width:580px){
+      .card-header{grid-template-columns:1fr auto 1fr}
+      .team-name{font-size:.82rem}
+      .detail-grid{grid-template-columns:1fr}
+      .source-row{grid-template-columns:80px 38px 1fr 38px 60px}
+      .hdr-badge{display:none}
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="hdr-left">
+    <div class="hdr-logo">🏀</div>
+    <div>
+      <div class="hdr-title">WNBA Today</div>
+      <div class="hdr-date" id="hdr-date">Loading…</div>
+    </div>
+  </div>
+  <div class="hdr-right">
+    <a class="refresh-btn" href="index.html" style="text-decoration:none">⚾ MLB</a>
+    <div class="hdr-badge badge-espn">📊 ESPN Data</div>
+    <div class="hdr-badge badge-kalshi">📈 Kalshi Q1–Q4 Markets</div>
+    <button class="refresh-btn" onclick="init()">↻ Refresh</button>
+  </div>
+</header>
+
+<div class="legend">
+  <div class="legend-item"><div class="dot" style="background:#60a5fa"></div>Model</div>
+  <div class="legend-item"><div class="dot" style="background:#fbbf24"></div>Vegas</div>
+  <div class="legend-item"><div class="dot" style="background:#a855f7"></div>Kalshi Market</div>
+  <div class="legend-item"><div class="dot" style="background:#14b8a6"></div>Quarter Grid</div>
+  <span style="margin-left:auto;font-size:.7rem;color:var(--dim2)">Click any game to expand · Edge = Model − Kalshi (after de-vig)</span>
+</div>
+
+<main>
+  <div id="status-banner">
+    <div class="spinner" id="spinner"></div>
+    <div class="status-steps">
+      <div class="status-step" id="s1">Fetching WNBA scoreboard…</div>
+      <div class="status-step" id="s2">Loading team efficiency stats…</div>
+      <div class="status-step" id="s3">Checking back-to-backs & resolving logged predictions…</div>
+      <div class="status-step" id="s4">Pulling Kalshi game + quarter markets…</div>
+    </div>
+  </div>
+
+  <div id="track-bar" style="display:none"></div>
+
+  <div class="section-hdr" id="games-hdr" style="display:none">
+    <span>Today's Games</span>
+    <div class="section-badges">
+      <span class="sc-badge" id="badge-count">0 games</span>
+      <span class="sc-badge" id="badge-mkts">0 Kalshi markets</span>
+    </div>
+  </div>
+
+  <div id="games"></div>
+</main>
+
+<footer>
+  WNBA Today · ESPN scoreboard + standings · Kalshi game & quarter markets (public data, no keys) ·
+  Model: regressions trained walk-forward on <b>1,177 real WNBA games 2022–2026</b> (opponent-adjusted PF/PA, fitted home edge +2.1, B2B −1.1, logistic win-prob calibration) ·
+  Backtest: <b>65.0% game winners</b> (home baseline 55.1%; 78% on picks ≥70% confidence) · quarter 3-way 52–56% (Q4 is near-coin-flip — garbage time is fitted, not ignored) · quarter score MAE ≈ 4.2 ·
+  Not financial advice. Kalshi fees ≈ 1–2¢/contract — edges under ~4¢ are usually not actionable.
+</footer>
+
+<script>
+// ═══════════════════════════════════════════════════════════════
+//  WNBA TODAY — quarter-by-quarter predictions vs Kalshi markets
+//  All data sources are public; NO API keys in this file.
+// ═══════════════════════════════════════════════════════════════
+const ESPN_SITE   = 'https://site.api.espn.com/apis/site/v2/sports/basketball/wnba';
+const ESPN_STAND  = 'https://site.api.espn.com/apis/v2/sports/basketball/wnba/standings';
+const KALSHI_BASE = 'https://api.elections.kalshi.com/trade-api/v2';
+
+// ── Fitted model (trained on 1,177 real WNBA games 2022–2026) ──
+// Walk-forward, point-in-time features only (no lookahead), so live == backtest.
+//   Game winner: 65.0% walk-forward (home-court baseline 55.1%)
+//     confident picks: p≥60% → 72.4% · p≥65% → 75.5% · p≥70% → 78.2%
+//   Quarter 3-way (win/tie/win): Q1 54.5% · Q2 56.4% · Q3 54.5% · Q4 51.6%
+//   Quarter score MAE ≈ 4.1–4.4 pts. Q4 slope collapses (garbage time) — fitted, not assumed.
+const FIT = {
+  shrinkK: 8, lgFallback: 83.0,
+  total:  {scale:1.0014, intercept:0.72,  b2b:0.297},   // T = s·(eH0+eA0)+c+b2b·(nB2B)
+  margin: {scale:1.0290, homeEdge:2.058, b2b:-1.146, sd:12.44}, // M = s·(eH0−eA0)+edge+b2b·(b2bH−b2bA)
+  winProbK: 0.14115,                                     // P(home) = sigmoid(k·M)
+  quarters: [ // μ_q = slope·M + intercept ; tie band fitted to empirical tie rates (4.7–5.7%)
+    {shareH:0.2566, shareA:0.2553, slope:0.2693, intercept: 0.084, sd:7.58, tieBand:0.456},
+    {shareH:0.2504, shareA:0.2474, slope:0.3117, intercept: 0.105, sd:7.08, tieBand:0.526},
+    {shareH:0.2493, shareA:0.2545, slope:0.2997, intercept:-0.528, sd:7.12, tieBand:0.447},
+    {shareH:0.2437, shareA:0.2428, slope:0.1193, intercept: 0.339, sd:7.05, tieBand:0.485},
+  ],
+};
+const SHRINK_K = FIT.shrinkK;
+
+// ── Kalshi city → ESPN abbr ─────────────────────────────────────
+const KALSHI_CITY = {
+  'Atlanta':'ATL','Chicago':'CHI','Connecticut':'CON','Dallas':'DAL',
+  'Golden State':'GS','Indiana':'IND','Las Vegas':'LV','Los Angeles':'LA',
+  'Minnesota':'MIN','New York':'NY','Phoenix':'PHX','Portland':'POR',
+  'Seattle':'SEA','Toronto':'TOR','Washington':'WSH',
+};
+const QTR_SERIES = ['KXWNBA1QWINNER','KXWNBA2QWINNER','KXWNBA3QWINNER','KXWNBA4QWINNER'];
+const MONTHS = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+
+// ── State ───────────────────────────────────────────────────────
+let teamStats = {};   // abbr → {wins,losses,gp,pf,pa,streak}
+let lgAvgPts  = 84;   // league average points per team per game (recomputed)
+let b2bTeams  = new Set();
+
+// ── Math helpers ────────────────────────────────────────────────
+function erf(x){
+  const s=x<0?-1:1; x=Math.abs(x);
+  const t=1/(1+0.3275911*x);
+  const y=1-(((((1.061405429*t-1.453152027)*t)+1.421413741)*t-0.284496736)*t+0.254829592)*t*Math.exp(-x*x);
+  return s*y;
+}
+function normCdf(x,mu=0,sd=1){ return 0.5*(1+erf((x-mu)/(sd*Math.SQRT2))); }
+function sigmoid(z){ return 1/(1+Math.exp(-clamp(z,-30,30))); }
+function shrink(val,gp,prior){ return (val*gp+prior*SHRINK_K)/(gp+SHRINK_K); }
+function fmtPct(p,d=0){ return p!=null?(p*100).toFixed(d)+'%':'—'; }
+function clamp(x,lo,hi){ return Math.max(lo,Math.min(hi,x)); }
+
+// ═══════════════════════════════════════════════════════════════
+//  MODEL — fitted regressions on opponent-adjusted efficiency
+//  (trained walk-forward on 2022–2026 linescores; see FIT above)
+// ═══════════════════════════════════════════════════════════════
+function predictGame(homeAbbr, awayAbbr){
+  const h=teamStats[homeAbbr], a=teamStats[awayAbbr];
+  if(!h||!a) return null;
+  // shrink per-game scoring rates toward league average (fitted k=8)
+  const hPF=shrink(h.pf,h.gp,lgAvgPts), hPA=shrink(h.pa,h.gp,lgAvgPts);
+  const aPF=shrink(a.pf,a.gp,lgAvgPts), aPA=shrink(a.pa,a.gp,lgAvgPts);
+  const eH0 = hPF*aPA/lgAvgPts, eA0 = aPF*hPA/lgAvgPts;
+  const b2bH=b2bTeams.has(homeAbbr)?1:0, b2bA=b2bTeams.has(awayAbbr)?1:0;
+  // fitted total + margin regressions, recombined into consistent team scores
+  const T  = FIT.total.scale*(eH0+eA0) + FIT.total.intercept + FIT.total.b2b*(b2bH+b2bA);
+  const mu = FIT.margin.scale*(eH0-eA0) + FIT.margin.homeEdge + FIT.margin.b2b*(b2bH-b2bA);
+  const expH=(T+mu)/2, expA=(T-mu)/2;
+  // fitted logistic margin→win-prob calibration
+  const pHomeGame = clamp(sigmoid(FIT.winProbK*mu), 0.03, 0.97);
+
+  const quarters = FIT.quarters.map(q=>{
+    const qh=expH*q.shareH, qa=expA*q.shareA;
+    const qmu = q.slope*mu + q.intercept;                 // fitted per-quarter margin response
+    const pAway = normCdf(-q.tieBand,qmu,q.sd);           // tie band fitted to empirical tie rate
+    const pHome = 1-normCdf(q.tieBand,qmu,q.sd);
+    return {h:qh, a:qa, pHome, pAway, pTie:clamp(1-pHome-pAway,0,1)};
+  });
+  return {expH, expA, mu, pHomeGame, quarters};
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  ESPN FETCHING
+// ═══════════════════════════════════════════════════════════════
+async function espnFetch(url){
+  const r=await fetch(url,{headers:{'Accept':'application/json'}});
+  if(!r.ok) throw new Error(`ESPN ${r.status}`);
+  return r.json();
+}
+
+function parseScoreboardEvent(evt){
+  const comp=evt.competitions?.[0]; if(!comp) return null;
+  const homeC=(comp.competitors||[]).find(c=>c.homeAway==='home');
+  const awayC=(comp.competitors||[]).find(c=>c.homeAway==='away');
+  if(!homeC||!awayC) return null;
+  const st=comp.status?.type?.name||'';
+  let inlineOdds=null;
+  for(const o of comp.odds||[]){
+    const hML=o.homeTeamOdds?.moneyLine, aML=o.awayTeamOdds?.moneyLine;
+    if(hML!=null&&aML!=null){
+      const hR=mlToRawProb(hML), aR=mlToRawProb(aML);
+      if(hR&&aR){
+        const t=hR+aR;
+        inlineOdds={homeP:hR/t, awayP:aR/t, homeML:hML, awayML:aML,
+          provider:o.provider?.name||'Vegas', overUnder:o.overUnder};
+        break;
+      }
+    }
+  }
+  const lines=c=>(c.linescores||[]).map(ls=>+ls.value);
+  return {
+    espnId:evt.id,
+    homeAbbr:homeC.team?.abbreviation, awayAbbr:awayC.team?.abbreviation,
+    homeName:homeC.team?.displayName||'', awayName:awayC.team?.displayName||'',
+    homeLogo:homeC.team?.logo||'', awayLogo:awayC.team?.logo||'',
+    homeRec:(homeC.records||[]).find(r=>r.type==='total')?.summary||'',
+    awayRec:(awayC.records||[]).find(r=>r.type==='total')?.summary||'',
+    homeScore:+homeC.score||0, awayScore:+awayC.score||0,
+    homeLines:lines(homeC), awayLines:lines(awayC),
+    gameDate:evt.date||null, venue:comp.venue?.fullName||'',
+    isLive:st.includes('IN_PROGRESS')||st.includes('LIVE')||st.includes('HALFTIME')||st.includes('END_PERIOD'),
+    isFinal:st.includes('FINAL'),
+    statusTxt:comp.status?.type?.shortDetail||'',
+    inlineOdds,
+  };
+}
+function mlToRawProb(ml){
+  if(ml==null||isNaN(ml)) return null; ml=parseFloat(ml);
+  return ml>0?100/(ml+100):Math.abs(ml)/(Math.abs(ml)+100);
+}
+
+async function fetchScoreboard(dateYYYYMMDD){
+  const url=dateYYYYMMDD?`${ESPN_SITE}/scoreboard?dates=${dateYYYYMMDD}`:`${ESPN_SITE}/scoreboard`;
+  const d=await espnFetch(url);
+  return (d.events||[]).map(parseScoreboardEvent).filter(Boolean);
+}
+
+async function loadTeamStats(){
+  const d=await espnFetch(ESPN_STAND);
+  teamStats={};
+  const entries=[];
+  for(const grp of d.children||[]) entries.push(...(grp.standings?.entries||[]));
+  if(!entries.length && d.standings?.entries) entries.push(...d.standings.entries);
+  let pfSum=0,n=0;
+  for(const e of entries){
+    const abbr=e.team?.abbreviation; if(!abbr) continue;
+    const s={}; for(const st of e.stats||[]) s[st.name]=st.value;
+    const wins=s.wins||0, losses=s.losses||0, gp=wins+losses;
+    const pf=s.avgPointsFor||lgAvgPts, pa=s.avgPointsAgainst||lgAvgPts;
+    teamStats[abbr]={wins,losses,gp,pf,pa,streak:s.streak||0};
+    pfSum+=pf; n++;
+  }
+  if(n) lgAvgPts=pfSum/n;
+}
+
+// yesterday's scoreboard → teams on a back-to-back today
+async function loadB2B(){
+  b2bTeams=new Set();
+  try{
+    const y=new Date(Date.now()-864e5);
+    const ymd=y.getFullYear()+String(y.getMonth()+1).padStart(2,'0')+String(y.getDate()).padStart(2,'0');
+    const games=await fetchScoreboard(ymd);
+    for(const g of games){ b2bTeams.add(g.homeAbbr); b2bTeams.add(g.awayAbbr); }
+  }catch(e){ console.warn('B2B check failed:',e); }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  KALSHI FETCHING (public market data — no auth)
+// ═══════════════════════════════════════════════════════════════
+async function kalshiFetch(path){
+  const url=KALSHI_BASE+path;
+  try{
+    const r=await fetch(url,{headers:{'Accept':'application/json'}});
+    if(!r.ok) throw new Error(`Kalshi ${r.status}`);
+    return r.json();
+  }catch(e){
+    // file:// origin gets blocked by CORS — retry via proxy
+    const r2=await fetch('https://corsproxy.io/?'+encodeURIComponent(url),
+      {headers:{'Accept':'application/json'}});
+    if(!r2.ok) throw new Error(`Kalshi proxy ${r2.status}`);
+    return r2.json();
+  }
+}
+
+// Returns {game: {pairKey→event}, quarters: [ {pairKey→event} ×4 ], marketCount}
+async function fetchKalshi(){
+  const out={game:{}, quarters:[{},{},{},{}], marketCount:0};
+  // event pairKey = sorted "ABBR|ABBR" from market yes_sub_title city names
+  function eventPairKey(markets){
+    const abbrs=new Set();
+    for(const m of markets){
+      const ab=KALSHI_CITY[m.yes_sub_title]; if(ab) abbrs.add(ab);
+    }
+    if(abbrs.size!==2) return null;
+    return [...abbrs].sort().join('|');
+  }
+  function groupMarkets(markets){
+    const byEvent={};
+    for(const m of markets||[]){
+      (byEvent[m.event_ticker]=byEvent[m.event_ticker]||[]).push(m);
+    }
+    return byEvent;
+  }
+  // Game winner series (events endpoint gives nested markets)
+  try{
+    const d=await kalshiFetch('/events?series_ticker=KXWNBAGAME&status=open&with_nested_markets=true&limit=200');
+    for(const ev of d.events||[]){
+      const key=eventPairKey(ev.markets||[]);
+      if(key){ out.game[key]={ticker:ev.event_ticker, markets:ev.markets}; out.marketCount+=(ev.markets||[]).length; }
+    }
+  }catch(e){ console.warn('Kalshi game markets failed:',e); }
+  // Quarter winner series (flat market lists)
+  await Promise.all(QTR_SERIES.map(async (st,qi)=>{
+    try{
+      const d=await kalshiFetch(`/markets?series_ticker=${st}&status=open&limit=200`);
+      const byEvent=groupMarkets(d.markets);
+      for(const [ticker,mkts] of Object.entries(byEvent)){
+        const key=eventPairKey(mkts);
+        if(key){ out.quarters[qi][key]={ticker, markets:mkts}; out.marketCount+=mkts.length; }
+      }
+    }catch(e){ console.warn(`Kalshi ${st} failed:`,e); }
+  }));
+  return out;
+}
+
+function marketMid(m){
+  if(!m) return null;
+  const bid=parseFloat(m.yes_bid_dollars), ask=parseFloat(m.yes_ask_dollars);
+  if(!isNaN(bid)&&!isNaN(ask)&&(bid>0||ask<1)) return (bid+ask)/2;
+  const lp=parseFloat(m.last_price_dollars);
+  return isNaN(lp)?null:lp;
+}
+
+// de-vig a game event → P(home wins), plus raw sides for display
+function kalshiGameProbs(ev, homeAbbr, awayAbbr){
+  if(!ev) return null;
+  let mH=null,mA=null,tH=null,tA=null;
+  for(const m of ev.markets){
+    const ab=KALSHI_CITY[m.yes_sub_title];
+    if(ab===homeAbbr){ mH=marketMid(m); tH=m; }
+    if(ab===awayAbbr){ mA=marketMid(m); tA=m; }
+  }
+  if(mH==null||mA==null) return null;
+  const t=mH+mA; if(t<=0) return null;
+  return {homeP:mH/t, rawHome:mH, rawAway:mA, mktH:tH, mktA:tA, ticker:ev.ticker};
+}
+
+// de-vig a 3-way quarter event → {h,t,a} probabilities
+function kalshiQtrProbs(ev, homeAbbr, awayAbbr){
+  if(!ev) return null;
+  let mH=null,mA=null,mT=null;
+  for(const m of ev.markets){
+    if(m.yes_sub_title==='Tie'){ mT=marketMid(m); continue; }
+    const ab=KALSHI_CITY[m.yes_sub_title];
+    if(ab===homeAbbr) mH=marketMid(m);
+    if(ab===awayAbbr) mA=marketMid(m);
+  }
+  if(mH==null||mA==null) return null;
+  mT=mT==null?0.06:mT;
+  const t=mH+mA+mT; if(t<=0) return null;
+  return {h:mH/t, t:mT/t, a:mA/t};
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  PREDICTION LOG — every model prediction saved & auto-graded
+// ═══════════════════════════════════════════════════════════════
+const LOG_KEY='wnba_pred_log_v2';   // v2 = trained model (v1 entries were untrained prototype)
+let predLog=(()=>{try{return JSON.parse(localStorage.getItem(LOG_KEY)||'[]');}catch(e){return[];}})();
+function saveLog(){ try{localStorage.setItem(LOG_KEY,JSON.stringify(predLog.slice(-400)));}catch(e){} }
+
+function logPrediction(g, model, kGame, kQtrs){
+  if(!model || g.isFinal || g.isLive) return;              // only log true pregame predictions
+  if(predLog.some(e=>e.id===g.espnId)) return;             // once per game
+  predLog.push({
+    id:g.espnId,
+    date:(g.gameDate||new Date().toISOString()).slice(0,10),
+    home:g.homeAbbr, away:g.awayAbbr,
+    model:{
+      game:+model.pHomeGame.toFixed(4),
+      scores:model.quarters.map(q=>[+q.a.toFixed(1),+q.h.toFixed(1)]),
+      q:model.quarters.map(q=>({h:+q.pHome.toFixed(4),t:+q.pTie.toFixed(4),a:+q.pAway.toFixed(4)})),
+    },
+    kalshi:{
+      game:kGame?+kGame.homeP.toFixed(4):null,
+      q:kQtrs.map(k=>k?{h:+k.h.toFixed(4),t:+k.t.toFixed(4),a:+k.a.toFixed(4)}:null),
+    },
+    result:null,
+  });
+  saveLog();
+}
+
+// grade pending predictions from final linescores
+async function resolveLog(){
+  const today=new Date().toISOString().slice(0,10);
+  const pendingDates=[...new Set(predLog.filter(e=>!e.result&&e.date<=today).map(e=>e.date))].slice(-10);
+  for(const date of pendingDates){
+    try{
+      const games=await fetchScoreboard(date.replace(/-/g,''));
+      for(const g of games){
+        if(!g.isFinal) continue;
+        const e=predLog.find(x=>x.id===g.espnId&&!x.result);
+        if(!e) continue;
+        e.result={
+          homeScore:g.homeScore, awayScore:g.awayScore,
+          homeWon:g.homeScore>g.awayScore?1:0,
+          qHome:g.homeLines.slice(0,4), qAway:g.awayLines.slice(0,4),
+        };
+      }
+    }catch(err){ console.warn('resolve failed for',date,err); }
+  }
+  saveLog();
+}
+
+function trackStats(){
+  const done=predLog.filter(e=>e.result);
+  if(!done.length) return null;
+  let gN=0,gHit=0, qN=0,qHit=0, vN=0,vHit=0;
+  for(const e of done){
+    gN++; if((e.model.game>=0.5)===!!e.result.homeWon) gHit++;
+    // game-level value bets: model vs kalshi disagreement ≥5¢
+    if(e.kalshi.game!=null && Math.abs(e.model.game-e.kalshi.game)>=0.05){
+      vN++;
+      const betHome=e.model.game>e.kalshi.game;
+      if(betHome===!!e.result.homeWon) vHit++;
+    }
+    for(let i=0;i<4;i++){
+      const q=e.model.q[i], rh=e.result.qHome?.[i], ra=e.result.qAway?.[i];
+      if(q==null||rh==null||ra==null) continue;
+      qN++;
+      const pick=q.h>=q.a?(q.h>=q.t?'h':'t'):(q.a>=q.t?'a':'t');
+      const actual=rh>ra?'h':(ra>rh?'a':'t');
+      if(pick===actual) qHit++;
+    }
+  }
+  return {gN,gHit,qN,qHit,vN,vHit};
+}
+
+function renderTrackBar(){
+  const el=document.getElementById('track-bar');
+  const s=trackStats();
+  const pending=predLog.filter(e=>!e.result).length;
+  if(!s&&!pending){ el.style.display='none'; return; }
+  el.style.display='flex';
+  let html='<span>📓 <b>Prediction log</b></span>';
+  if(s){
+    const pct=(h,n)=>n?` <span class="${h/n>=0.5?'track-good':'track-bad'}">${Math.round(h/n*100)}%</span>`:'';
+    html+=`<span class="track-stat">Game picks: <b>${s.gHit}/${s.gN}</b>${pct(s.gHit,s.gN)}</span>`;
+    html+=`<span class="track-stat">Quarter picks: <b>${s.qHit}/${s.qN}</b>${pct(s.qHit,s.qN)}</span>`;
+    if(s.vN) html+=`<span class="track-stat">Value bets (≥5¢ edge): <b>${s.vHit}/${s.vN}</b>${pct(s.vHit,s.vN)}</span>`;
+  }
+  if(pending) html+=`<span class="track-stat" style="color:var(--dim2)">${pending} pending</span>`;
+  html+=`<button class="track-export" onclick="exportLog()">Export JSON</button>`;
+  el.innerHTML=html;
+}
+function exportLog(){
+  const blob=new Blob([JSON.stringify(predLog,null,2)],{type:'application/json'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download='wnba_prediction_log.json';
+  a.click();
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  RENDER
+// ═══════════════════════════════════════════════════════════════
+function fmtTime(iso){
+  if(!iso) return '';
+  try{return new Date(iso).toLocaleTimeString([],{hour:'numeric',minute:'2-digit',timeZoneName:'short'});}
+  catch(e){return '';}
+}
+function edgeChip(edge, betSide){
+  if(edge==null) return '<span class="qt-edge qe-neu">—</span>';
+  const pct=(edge*100).toFixed(1);
+  if(edge>=0.04) return `<span class="qt-edge qe-pos">+${pct}¢ ${betSide}</span>`;
+  if(edge>=0.02) return `<span class="qt-edge qe-neu">+${pct}¢ ${betSide}</span>`;
+  return '<span class="qt-edge qe-neu">no edge</span>';
+}
+
+function renderGame(g, model, kGame, kQtrs){
+  const hasActual=(g.isLive||g.isFinal)&&g.homeLines.length>0;
+  const statusBadge=g.isFinal
+    ? '<span class="mkt-status-badge badge-final">FINAL</span>'
+    : g.isLive ? `<span class="mkt-status-badge badge-live-game">● ${g.statusTxt||'LIVE'}</span>`
+    : kGame ? '<span class="mkt-status-badge badge-live-mkt">Kalshi ✓</span>'
+    : '<span class="mkt-status-badge badge-no-mkt">no market</span>';
+
+  const b2bA=b2bTeams.has(g.awayAbbr)?'<span class="b2b-chip">B2B</span>':'';
+  const b2bH=b2bTeams.has(g.homeAbbr)?'<span class="b2b-chip">B2B</span>':'';
+
+  // ── consensus bar (model + vegas blend when available) ──
+  let consensusHtml='';
+  let pHome=model?model.pHomeGame:null;
+  const vegasP=g.inlineOdds?g.inlineOdds.homeP:null;
+  if(pHome!=null&&vegasP!=null) pHome=0.45*pHome+0.55*vegasP;
+  if(pHome!=null){
+    const pickCls=pHome>0.53?'cp-home':pHome<0.47?'cp-away':'cp-even';
+    const pickTxt=pHome>0.53?`${g.homeAbbr} ${fmtPct(pHome)}`:pHome<0.47?`${g.awayAbbr} ${fmtPct(1-pHome)}`:'Toss-up';
+    consensusHtml=`
+    <div class="consensus-block">
+      <div class="consensus-header">
+        <div class="consensus-title">🎯 ${vegasP!=null?'Consensus (model+Vegas)':'Model Prediction'}</div>
+        <div class="consensus-pick ${pickCls}">${pickTxt}</div>
+      </div>
+      <div class="consensus-bar-row">
+        <div class="cb-abbr away">${g.awayAbbr}</div>
+        <div class="consensus-bar-track">
+          <div class="cbar-away" style="width:${(1-pHome)*100}%"></div>
+          <div class="cbar-home"></div>
+        </div>
+        <div class="cb-abbr home">${g.homeAbbr}</div>
+      </div>
+      <div class="consensus-vals">
+        <div class="cv away">${fmtPct(1-pHome)}</div>
+        <div class="cv home">${fmtPct(pHome)}</div>
+      </div>
+      ${model?`<div class="proj-score">Projected final: <b>${g.awayAbbr} ${model.expA.toFixed(0)} — ${g.homeAbbr} ${model.expH.toFixed(0)}</b></div>`:''}
+    </div>`;
+  }
+
+  // ── sources panel ──
+  function srcRow(cls,label,pH,detail){
+    if(pH==null) return `<div class="source-row ${cls}"><div class="src-label">${label}</div><div class="src-na">not available</div></div>`;
+    return `<div class="source-row ${cls}">
+      <div class="src-label">${label}</div>
+      <div class="src-away">${fmtPct(1-pH)}</div>
+      <div class="src-bar-track"><div class="src-bar-away" style="width:${(1-pH)*100}%"></div><div class="src-bar-home"></div></div>
+      <div class="src-home">${fmtPct(pH)}</div>
+      <div class="src-detail">${detail||''}</div>
+    </div>`;
+  }
+  const sourcesHtml=`<div class="sources-panel">
+    ${srcRow('src-model','🧠 Model',model?model.pHomeGame:null,model?`margin ${model.mu>0?'+':''}${model.mu.toFixed(1)}`:'')}
+    ${srcRow('src-vegas','💰 Vegas',vegasP,g.inlineOdds?`${g.inlineOdds.provider}`:'')}
+    ${srcRow('src-kalshi','📈 Kalshi',kGame?kGame.homeP:null,kGame?`mid, de-vigged`:'')}
+  </div>`;
+
+  // ── quarter grid ──
+  let qtrHtml='';
+  if(model){
+    const cols=[0,1,2,3];
+    const th=cols.map(i=>`<th>Q${i+1}</th>`).join('')+'<th class="qt-final-col">Final</th>';
+    const scoreCell=(pred,actual)=>`<td><span class="qt-pred">${pred.toFixed(1)}</span>${actual!=null?`<span class="qt-actual">act ${actual}</span>`:''}</td>`;
+    const awayCells=cols.map(i=>scoreCell(model.quarters[i].a, hasActual?g.awayLines[i]:null)).join('');
+    const homeCells=cols.map(i=>scoreCell(model.quarters[i].h, hasActual?g.homeLines[i]:null)).join('');
+    const modelCells=cols.map(i=>{
+      const q=model.quarters[i];
+      const fav=q.pHome>=q.pAway?g.homeAbbr:g.awayAbbr;
+      const p=Math.max(q.pHome,q.pAway);
+      return `<td><span class="qt-model">${fav} ${fmtPct(p)}</span><span class="qt-sub">tie ${fmtPct(q.pTie)}</span></td>`;
+    }).join('');
+    const kalshiCells=cols.map(i=>{
+      const k=kQtrs[i];
+      if(!k) return '<td><span class="qt-sub">no mkt</span></td>';
+      const fav=k.h>=k.a?g.homeAbbr:g.awayAbbr;
+      return `<td><span class="qt-mkt">${fav} ${fmtPct(Math.max(k.h,k.a))}</span><span class="qt-sub">tie ${fmtPct(k.t)}</span></td>`;
+    }).join('');
+    const edgeCells=cols.map(i=>{
+      const q=model.quarters[i], k=kQtrs[i];
+      if(!k) return '<td><span class="qt-edge qe-neu">—</span></td>';
+      // best single-side edge: model prob − market prob on same outcome
+      const sides=[['h',q.pHome,k.h,g.homeAbbr],['a',q.pAway,k.a,g.awayAbbr],['t',q.pTie,k.t,'TIE']];
+      let best=null;
+      for(const [,mp,kp,lbl] of sides){
+        const e=mp-kp;
+        if(!best||e>best.e) best={e,lbl};
+      }
+      return `<td>${edgeChip(best.e,best.lbl)}</td>`;
+    }).join('');
+    const gameEdge=kGame&&model?model.pHomeGame-kGame.homeP:null;
+    const finalModel=model?`<td class="qt-final-col">${model.pHomeGame>=0.5?g.homeAbbr:g.awayAbbr} ${fmtPct(Math.max(model.pHomeGame,1-model.pHomeGame))}</td>`:'<td class="qt-final-col">—</td>';
+    const finalKalshi=kGame?`<td class="qt-final-col">${kGame.homeP>=0.5?g.homeAbbr:g.awayAbbr} ${fmtPct(Math.max(kGame.homeP,1-kGame.homeP))}</td>`:'<td class="qt-final-col"><span class="qt-sub">no mkt</span></td>';
+    const finalEdge=gameEdge!=null
+      ?`<td class="qt-final-col">${edgeChip(Math.abs(gameEdge),gameEdge>0?g.homeAbbr:g.awayAbbr)}</td>`
+      :'<td class="qt-final-col"><span class="qt-edge qe-neu">—</span></td>';
+    qtrHtml=`
+    <div class="qtr-block">
+      <div class="qtr-hdr">
+        <div class="qtr-title">⏱ Quarter-by-Quarter</div>
+        <div class="qtr-note">model scores${hasActual?' + actuals':''} · Kalshi 3-way de-vigged</div>
+      </div>
+      <div class="qtr-scroll"><table class="qtr-table">
+        <tr><th></th>${th}</tr>
+        <tr class="qt-away"><td>${g.awayAbbr}${b2bA}</td>${awayCells}<td class="qt-final-col">${model.expA.toFixed(0)}${hasActual?`<span class="qt-actual">act ${g.awayScore}</span>`:''}</td></tr>
+        <tr class="qt-home"><td>${g.homeAbbr}${b2bH}</td>${homeCells}<td class="qt-final-col">${model.expH.toFixed(0)}${hasActual?`<span class="qt-actual">act ${g.homeScore}</span>`:''}</td></tr>
+        <tr><td class="qt-rowlbl">Model</td>${modelCells}${finalModel}</tr>
+        <tr><td class="qt-rowlbl">Kalshi</td>${kalshiCells}${finalKalshi}</tr>
+        <tr><td class="qt-rowlbl">Edge</td>${edgeCells}${finalEdge}</tr>
+      </table></div>
+    </div>`;
+  }
+
+  // ── edge summary row ──
+  const gameEdge=(kGame&&model)?model.pHomeGame-kGame.homeP:null;
+  let edgeBadge='<span class="edge-badge edge-neu">No Kalshi market</span>';
+  if(gameEdge!=null){
+    const abs=Math.abs(gameEdge), side=gameEdge>0?g.homeAbbr:g.awayAbbr;
+    edgeBadge=abs>=0.05?`<span class="edge-badge edge-pos">VALUE: ${side} +${(abs*100).toFixed(1)}¢ vs market</span>`
+      :abs>=0.03?`<span class="edge-badge edge-neu">${side} +${(abs*100).toFixed(1)}¢ (below fee threshold)</span>`
+      :'<span class="edge-badge edge-neu">Model agrees with market</span>';
+  }
+
+  // ── expanded detail ──
+  const h=teamStats[g.homeAbbr]||{}, a=teamStats[g.awayAbbr]||{};
+  const sr=(lbl,av,hv,fmt=v=>v?.toFixed?.(1)??v??'—',hiGood=true)=>{
+    const aBet=av!=null&&hv!=null&&(hiGood?av>hv:av<hv);
+    const hBet=av!=null&&hv!=null&&(hiGood?hv>av:hv<av);
+    return `<div class="stat-row"><div class="sr-away ${aBet?'sr-better':''}">${fmt(av)}</div><div class="sr-lbl">${lbl}</div><div class="sr-home ${hBet?'sr-better':''}">${fmt(hv)}</div></div>`;
+  };
+  const detailHtml=`<div class="card-detail">
+    <div class="detail-grid">
+      <div class="detail-stat">
+        <h4>Team Efficiency (season)</h4>
+        ${sr('Record',null,null,()=>'' ,true)}
+        <div class="stat-row"><div class="sr-away">${a.wins??'—'}–${a.losses??'—'}</div><div class="sr-lbl">Record</div><div class="sr-home">${h.wins??'—'}–${h.losses??'—'}</div></div>
+        ${sr('Pts For / gm',a.pf,h.pf)}
+        ${sr('Pts Allowed / gm',a.pa,h.pa,v=>v?.toFixed?.(1)??'—',false)}
+        ${sr('Net Rating',a.pf!=null?a.pf-a.pa:null,h.pf!=null?h.pf-h.pa:null,v=>v!=null?(v>0?'+':'')+v.toFixed(1):'—')}
+      </div>
+      <div class="detail-stat">
+        <h4>Model Inputs</h4>
+        <div class="kd-row"><span>Home edge (fitted)</span><span>+${FIT.margin.homeEdge.toFixed(1)} pts margin</span></div>
+        <div class="kd-row"><span>${g.awayAbbr} back-to-back</span><span>${b2bTeams.has(g.awayAbbr)?`yes (${FIT.margin.b2b} margin)`:'no'}</span></div>
+        <div class="kd-row"><span>${g.homeAbbr} back-to-back</span><span>${b2bTeams.has(g.homeAbbr)?`yes (${FIT.margin.b2b} margin)`:'no'}</span></div>
+        <div class="kd-row"><span>Expected margin</span><span>${model?(model.mu>0?g.homeAbbr:g.awayAbbr)+' by '+Math.abs(model.mu).toFixed(1):'—'}</span></div>
+        <div class="kd-row"><span>Projected total</span><span>${model?(model.expH+model.expA).toFixed(0):'—'}${g.inlineOdds?.overUnder?` (Vegas O/U ${g.inlineOdds.overUnder})`:''}</span></div>
+      </div>
+    </div>
+    ${kGame?`<div class="kalshi-detail">
+      <h4>📈 Kalshi Market Detail</h4>
+      <div class="kd-row"><span>Event</span><span>${kGame.ticker}</span></div>
+      <div class="kd-row"><span>${g.homeAbbr} yes bid/ask</span><span>${kGame.mktH?.yes_bid_dollars??'—'} / ${kGame.mktH?.yes_ask_dollars??'—'}</span></div>
+      <div class="kd-row"><span>${g.awayAbbr} yes bid/ask</span><span>${kGame.mktA?.yes_bid_dollars??'—'} / ${kGame.mktA?.yes_ask_dollars??'—'}</span></div>
+      <div class="kd-row"><span>De-vigged P(${g.homeAbbr})</span><span>${fmtPct(kGame.homeP,1)}</span></div>
+    </div>`:''}
+    <div class="detail-cta">
+      <a class="kalshi-link" href="https://kalshi.com/markets/kxwnbagame" target="_blank" rel="noopener">Kalshi game markets ↗</a>
+      <a class="kalshi-link" href="https://kalshi.com/markets/kxwnba1qwinner" target="_blank" rel="noopener">Quarter markets ↗</a>
+      <span>Predictions auto-logged pregame and graded from final linescores.</span>
+    </div>
+  </div>`;
+
+  return `<div class="game-card" id="card-${g.espnId}">
+    <div class="card-header" onclick="toggleCard('${g.espnId}')">
+      <div class="team-side away">
+        <div class="team-logo-name">
+          ${g.awayLogo?`<img class="team-logo" src="${g.awayLogo}" alt=""/>`:''}
+          <span class="team-name">${g.awayName}</span>
+        </div>
+        <span class="team-record">${g.awayRec}${b2bA?' ':''}${b2bA}</span>
+      </div>
+      <div class="game-center">
+        <span class="game-time">${g.isFinal||g.isLive?`${g.awayScore}–${g.homeScore}`:fmtTime(g.gameDate)}</span>
+        <span class="at-badge">@</span>
+        ${statusBadge}
+      </div>
+      <div class="team-side home">
+        <div class="team-logo-name">
+          ${g.homeLogo?`<img class="team-logo" src="${g.homeLogo}" alt=""/>`:''}
+          <span class="team-name">${g.homeName}</span>
+        </div>
+        <span class="team-record">${g.homeRec}${b2bH?' ':''}${b2bH}</span>
+      </div>
+    </div>
+    ${consensusHtml}
+    ${sourcesHtml}
+    ${qtrHtml}
+    <div class="edge-row" onclick="toggleCard('${g.espnId}')">
+      <div class="edge-left"><span class="edge-label">Game edge:</span>${edgeBadge}</div>
+      <span class="expand-hint">details ▾</span>
+    </div>
+    ${detailHtml}
+  </div>`;
+}
+function toggleCard(id){ document.getElementById('card-'+id)?.classList.toggle('expanded'); }
+
+// ═══════════════════════════════════════════════════════════════
+//  INIT
+// ═══════════════════════════════════════════════════════════════
+function step(id,state){
+  const el=document.getElementById(id); if(!el) return;
+  el.classList.remove('active','done');
+  if(state) el.classList.add(state);
+}
+
+async function init(){
+  document.getElementById('hdr-date').textContent=new Date().toLocaleDateString([],{weekday:'long',month:'long',day:'numeric',year:'numeric'});
+  document.getElementById('status-banner').style.display='flex';
+  document.getElementById('games').innerHTML='';
+  document.getElementById('games-hdr').style.display='none';
+
+  step('s1','active');
+  let games=[];
+  try{ games=await fetchScoreboard(); step('s1','done'); }
+  catch(e){
+    document.getElementById('status-banner').innerHTML=`⚠️ Could not reach ESPN (${e.message}). Check your connection and refresh.`;
+    return;
+  }
+
+  step('s2','active');
+  try{ await loadTeamStats(); }catch(e){ console.warn('standings failed:',e); }
+  step('s2','done');
+
+  step('s3','active');
+  await Promise.all([loadB2B(), resolveLog()]);
+  step('s3','done');
+
+  step('s4','active');
+  let kalshi={game:{},quarters:[{},{},{},{}],marketCount:0};
+  try{ kalshi=await fetchKalshi(); }catch(e){ console.warn('kalshi failed:',e); }
+  step('s4','done');
+
+  document.getElementById('status-banner').style.display='none';
+  document.getElementById('games-hdr').style.display='flex';
+  document.getElementById('badge-count').textContent=`${games.length} game${games.length!==1?'s':''}`;
+  document.getElementById('badge-mkts').textContent=`${kalshi.marketCount} Kalshi markets`;
+  renderTrackBar();
+
+  if(!games.length){
+    document.getElementById('games').innerHTML='<div class="no-games">No WNBA games today. Check back tomorrow. 🏀</div>';
+    return;
+  }
+
+  let html='';
+  for(const g of games){
+    const model=predictGame(g.homeAbbr,g.awayAbbr);
+    const key=[g.homeAbbr,g.awayAbbr].sort().join('|');
+    const kGame=kalshiGameProbs(kalshi.game[key],g.homeAbbr,g.awayAbbr);
+    const kQtrs=kalshi.quarters.map(qmap=>kalshiQtrProbs(qmap[key],g.homeAbbr,g.awayAbbr));
+    logPrediction(g,model,kGame,kQtrs);
+    html+=renderGame(g,model,kGame,kQtrs);
+  }
+  document.getElementById('games').innerHTML=html;
+  renderTrackBar();
+}
+
+init();
+</script>
+</body>
+</html>
