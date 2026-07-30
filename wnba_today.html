@@ -203,6 +203,8 @@
     .qt-mkt{color:#c084fc;font-weight:600}
     .qt-model{color:#60a5fa;font-weight:600}
     .qt-sub{font-size:.62rem;color:var(--dim2);display:block}
+    .live-block{border-color:#2a7f50!important;background:linear-gradient(135deg,#0c2a1c 0%,#0a1f18 100%)!important}
+    .qt-done{color:var(--dim);font-weight:600;font-size:.72rem}
     .qt-edge{font-size:.66rem;font-weight:700;padding:1px 6px;border-radius:8px;display:inline-block}
     .qe-pos{background:rgba(34,197,94,.15);color:var(--green)}
     .qe-neg{background:rgba(232,23,77,.12);color:#f87171}
@@ -370,6 +372,37 @@ const FIT = {
     GS:[76.8,76.41],LA:[85.4,87.95],NY:[81.14,79.83],LV:[85.66,80.5],IND:[83.2,80.85],
     CHI:[75.42,85.43],PHX:[82.07,80.68],SEA:[81.49,80.64],CON:[76.27,85.08]},
 };
+
+// ── LIVE in-game model ──────────────────────────────────────────
+// P(home wins | current lead, pregame margin) = sigmoid(a·lead + b·μ + c),
+// fitted at each quarter boundary. Honest out-of-time validation
+// (fit 2022–24, tested on 509 games from 2025–26):
+//   after Q1  69.0% acc / logloss .581   (pregame-only .616, lead-only .639)
+//   after Q2  76.2% acc / logloss .479   (lead-only .515)
+//   after Q3  81.5% acc / logloss .392   (lead-only .410)
+// The fitted weights encode how much a point of scoreboard is worth versus a
+// point of pregame edge: 0.89× after Q1, 1.40× after Q2, 2.81× after Q3 —
+// i.e. early leads are discounted, late leads dominate. Learned, not assumed.
+const LIVE_FIT={
+  0:{lead:0,      mu:0.1461, int:0},        // tip-off = the pregame model
+  1:{lead:0.13624,mu:0.15311,int:-0.15818},
+  2:{lead:0.16654,mu:0.11922,int:-0.18360},
+  3:{lead:0.25205,mu:0.08984,int:-0.18807},
+};
+// Remaining-quarter margin: μ_q = a·lead + b·μ + c  (keys "checkpoint_quarterIdx").
+// Note the negative lead weights — teams sitting on a lead score slightly less
+// in later quarters (mean reversion / bench minutes), also fitted.
+const LIVE_QFIT={
+  "0_0":{lead:0,mu:0.2510,int:0.200,sd:7.57}, "0_1":{lead:0,mu:0.3228,int:0.078,sd:7.11},
+  "0_2":{lead:0,mu:0.2919,int:-0.543,sd:7.07},"0_3":{lead:0,mu:0.1343,int:0.265,sd:7.11},
+  "1_1":{lead:-0.11087,mu:0.35065,int:0.100,sd:7.06},
+  "1_2":{lead:-0.03108,mu:0.29966,int:-0.536,sd:7.06},
+  "1_3":{lead:-0.08993,mu:0.15692,int:0.283,sd:7.08},
+  "2_2":{lead:-0.05262,mu:0.32205,int:-0.528,sd:7.05},
+  "2_3":{lead:-0.10775,mu:0.19617,int:0.295,sd:7.03},
+  "3_3":{lead:-0.12399,mu:0.24168,int:0.232,sd:6.97},
+};
+const QTR_MINUTES=10;   // WNBA quarters
 const SHRINK_K = FIT.shrinkK;
 
 // ── Kalshi city → ESPN abbr ─────────────────────────────────────
@@ -383,6 +416,7 @@ const QTR_SERIES = ['KXWNBA1QWINNER','KXWNBA2QWINNER','KXWNBA3QWINNER','KXWNBA4Q
 const MONTHS = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
 
 // ── State ───────────────────────────────────────────────────────
+let kalshiIsLive = false;  // true only when prices came straight from Kalshi
 let teamStats = {};   // abbr → {wins,losses,gp,pf,pa,streak}
 let lgAvgPts  = 84;   // league average points per team per game (recomputed)
 let b2bTeams  = new Set();
@@ -429,6 +463,55 @@ function predictGame(homeAbbr, awayAbbr){
     return {h:qh, a:qa, pHome, pAway, pTie:clamp(1-pHome-pAway,0,1)};
   });
   return {expH, expA, mu, pHomeGame, quarters, missH, missA};
+}
+
+// ── Live state → re-predicted win prob & remaining quarters ─────
+// Coefficients are fitted at quarter boundaries; mid-quarter we interpolate
+// them by elapsed game time so the number moves smoothly rather than jumping.
+function liveElapsed(g){
+  if(g.isFinal) return 4;
+  const per=Math.min(g.period||0,4);
+  if(per<=0) return 0;
+  const secs=parseClock(g.clock);            // seconds left in current quarter
+  const doneInQtr=secs==null?0:Math.max(0,Math.min(1,(QTR_MINUTES*60-secs)/(QTR_MINUTES*60)));
+  return Math.min(4,(per-1)+doneInQtr);      // quarters elapsed, fractional
+}
+function parseClock(c){
+  if(!c) return null;
+  const m=String(c).match(/(\d+):(\d+)/);
+  return m?(+m[1]*60+ +m[2]):null;
+}
+function lerpFit(el){
+  const lo=Math.max(0,Math.min(3,Math.floor(el))), hi=Math.max(0,Math.min(3,Math.ceil(el)));
+  const t=el>=3?0:(el-lo);
+  const A=LIVE_FIT[lo], B=LIVE_FIT[hi];
+  return {lead:A.lead+(B.lead-A.lead)*t, mu:A.mu+(B.mu-A.mu)*t, int:A.int+(B.int-A.int)*t};
+}
+function predictLive(model,g){
+  if(!model||(!g.isLive&&!g.isFinal)) return null;
+  const el=liveElapsed(g);
+  const lead=g.homeScore-g.awayScore;
+  const f=lerpFit(el);
+  // Cap at 99/1 — a live game is never certain, and it keeps the two
+  // displayed percentages summing to 100 rather than showing "100% / 1%".
+  const pHome=clamp(sigmoid(f.lead*lead+f.mu*model.mu+f.int),0.01,0.99);
+  // remaining quarters: completed ones are history, the rest get re-predicted
+  const cp=Math.max(0,Math.min(3,Math.floor(el)));
+  const preTotals=FIT.quarters.map(q=>model.expH*q.shareH+model.expA*q.shareA);
+  const quarters=[];
+  for(let j=0;j<4;j++){
+    if(j<Math.floor(el)){ quarters.push(null); continue; }   // already played
+    const k=LIVE_QFIT[`${cp}_${j}`]||LIVE_QFIT[`0_${j}`];
+    const qmu=k.lead*lead+k.mu*model.mu+k.int;
+    const tot=preTotals[j];
+    const pAway=normCdf(-0.5,qmu,k.sd), pHomeQ=1-normCdf(0.5,qmu,k.sd);
+    quarters.push({idx:j, h:(tot+qmu)/2, a:(tot-qmu)/2,
+      pHome:pHomeQ, pAway, pTie:clamp(1-pHomeQ-pAway,0,1)});
+  }
+  const remain=quarters.filter(Boolean);
+  const projH=g.homeScore+remain.reduce((s,q)=>s+q.h,0);
+  const projA=g.awayScore+remain.reduce((s,q)=>s+q.a,0);
+  return {pHome, quarters, projH, projA, elapsed:el, lead};
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -488,6 +571,8 @@ function parseScoreboardEvent(evt){
     isLive:st.includes('IN_PROGRESS')||st.includes('LIVE')||st.includes('HALFTIME')||st.includes('END_PERIOD'),
     isFinal:st.includes('FINAL'),
     statusTxt:comp.status?.type?.shortDetail||'',
+    period:comp.status?.period||0,
+    clock:comp.status?.displayClock||'',
     inlineOdds,
   };
 }
@@ -924,6 +1009,36 @@ function renderGame(g, model, kGame, kQtrs){
   const injChip=inj=>inj?`<span class="b2b-chip" title="${inj.names.map(n=>`${n.name} (${n.ppg.toFixed(1)} ppg)`).join(', ')}">🩹 −${inj.miss.toFixed(0)}</span>`:'';
   const injChipA=injChip(injA), injChipH=injChip(injH);
 
+  // ── LIVE re-prediction block (replaces consensus once the ball is up) ──
+  const live=predictLive(model,g);
+  let liveHtml='';
+  if(live&&g.isLive){
+    const pickCls=live.pHome>0.53?'cp-home':live.pHome<0.47?'cp-away':'cp-even';
+    const leadTxt=live.lead===0?'Tied':`${live.lead>0?g.homeAbbr:g.awayAbbr} +${Math.abs(live.lead)}`;
+    // Express the swing for the team named in the badge, not always the home
+    // side, so the sign matches what the reader is looking at.
+    const favIsHome=live.pHome>=0.5;
+    const swing=(favIsHome?live.pHome:1-live.pHome)-(favIsHome?model.pHomeGame:1-model.pHomeGame);
+    const favAbbr=favIsHome?g.homeAbbr:g.awayAbbr;
+    liveHtml=`
+    <div class="consensus-block live-block">
+      <div class="consensus-header">
+        <div class="consensus-title" style="color:#4ade80">● LIVE WIN PROBABILITY</div>
+        <div class="consensus-pick ${pickCls}">${live.pHome>=0.5?g.homeAbbr:g.awayAbbr} ${fmtPct(Math.max(live.pHome,1-live.pHome))}</div>
+      </div>
+      <div class="consensus-bar-row">
+        <div class="cb-abbr away">${g.awayAbbr}</div>
+        <div class="consensus-bar-track">
+          <div class="cbar-away" style="width:${(1-live.pHome)*100}%"></div><div class="cbar-home"></div>
+        </div>
+        <div class="cb-abbr home">${g.homeAbbr}</div>
+      </div>
+      <div class="consensus-vals"><div class="cv away">${fmtPct(1-live.pHome)}</div><div class="cv home">${fmtPct(live.pHome)}</div></div>
+      <div class="wnba-proj">${leadTxt} · ${g.statusTxt} · projected <b>${g.awayAbbr} ${live.projA.toFixed(0)} — ${g.homeAbbr} ${live.projH.toFixed(0)}</b>
+        <span style="color:${swing>=0?'#4ade80':'#f87171'}"> · ${favAbbr} ${swing>=0?'+':''}${(swing*100).toFixed(0)} pts vs pregame</span></div>
+    </div>`;
+  }
+
   // ── consensus bar (model + vegas blend when available) ──
   let consensusHtml='';
   let pHome=model?model.pHomeGame:null;
@@ -980,6 +1095,21 @@ function renderGame(g, model, kGame, kQtrs){
     const awayCells=cols.map(i=>scoreCell(model.quarters[i].a, hasActual?g.awayLines[i]:null)).join('');
     const homeCells=cols.map(i=>scoreCell(model.quarters[i].h, hasActual?g.homeLines[i]:null)).join('');
     const modelCells=cols.map(i=>{
+      // During a live game, completed quarters show the actual result and
+      // remaining quarters show the RE-PREDICTED probabilities.
+      if(live&&g.isLive){
+        const lq=live.quarters[i];
+        if(!lq){
+          const hw=g.homeLines[i], aw=g.awayLines[i];
+          if(hw!=null&&aw!=null){
+            const won=hw>aw?g.homeAbbr:(aw>hw?g.awayAbbr:'TIE');
+            return `<td><span class="qt-done">✓ ${won}</span><span class="qt-sub">final ${aw}–${hw}</span></td>`;
+          }
+          return '<td><span class="qt-sub">—</span></td>';
+        }
+        const fav=lq.pHome>=lq.pAway?g.homeAbbr:g.awayAbbr;
+        return `<td><span class="qt-model">${fav} ${fmtPct(Math.max(lq.pHome,lq.pAway))}</span><span class="qt-sub">live · tie ${fmtPct(lq.pTie)}</span></td>`;
+      }
       const q=model.quarters[i];
       const fav=q.pHome>=q.pAway?g.homeAbbr:g.awayAbbr;
       const p=Math.max(q.pHome,q.pAway);
@@ -992,28 +1122,35 @@ function renderGame(g, model, kGame, kQtrs){
       return `<td><span class="qt-mkt">${fav} ${fmtPct(Math.max(k.h,k.a))}</span><span class="qt-sub">tie ${fmtPct(k.t)}</span></td>`;
     }).join('');
     const edgeCells=cols.map(i=>{
-      const q=model.quarters[i], k=kQtrs[i];
+      // Live games compare the RE-PREDICTED quarter probs against Kalshi's
+      // still-open quarter markets — the whole point of the live model.
+      const q=(live&&g.isLive)?live.quarters[i]:model.quarters[i];
+      const k=kQtrs[i];
+      if(!q) return '<td><span class="qt-sub">played</span></td>';
       if(!k) return '<td><span class="qt-edge qe-neu">—</span></td>';
-      // best single-side edge: model prob − market prob on same outcome
-      const sides=[['h',q.pHome,k.h,g.homeAbbr],['a',q.pAway,k.a,g.awayAbbr],['t',q.pTie,k.t,'TIE']];
+      // Snapshot prices are pregame; don't diff them against a live model.
+      if(live&&g.isLive&&!kalshiIsLive) return '<td><span class="qt-sub">stale mkt</span></td>';
+      const sides=[[q.pHome,k.h,g.homeAbbr],[q.pAway,k.a,g.awayAbbr],[q.pTie,k.t,'TIE']];
       let best=null;
-      for(const [,mp,kp,lbl] of sides){
+      for(const [mp,kp,lbl] of sides){
         const e=mp-kp;
         if(!best||e>best.e) best={e,lbl};
       }
       return `<td>${edgeChip(best.e,best.lbl)}</td>`;
     }).join('');
     const gameEdge=kGame&&model?model.pHomeGame-kGame.homeP:null;
-    const finalModel=model?`<td class="qt-final-col">${model.pHomeGame>=0.5?g.homeAbbr:g.awayAbbr} ${fmtPct(Math.max(model.pHomeGame,1-model.pHomeGame))}</td>`:'<td class="qt-final-col">—</td>';
+    const pFin=(live&&g.isLive)?live.pHome:model.pHomeGame;
+    const finalModel=`<td class="qt-final-col">${pFin>=0.5?g.homeAbbr:g.awayAbbr} ${fmtPct(Math.max(pFin,1-pFin))}${(live&&g.isLive)?'<span class="qt-sub">live</span>':''}</td>`;
     const finalKalshi=kGame?`<td class="qt-final-col">${kGame.homeP>=0.5?g.homeAbbr:g.awayAbbr} ${fmtPct(Math.max(kGame.homeP,1-kGame.homeP))}</td>`:'<td class="qt-final-col"><span class="qt-sub">no mkt</span></td>';
-    const finalEdge=gameEdge!=null
+    const staleLive=(live&&g.isLive&&!kalshiIsLive);
+    const finalEdge=(gameEdge!=null&&!staleLive)
       ?`<td class="qt-final-col">${edgeChip(Math.abs(gameEdge),gameEdge>0?g.homeAbbr:g.awayAbbr)}</td>`
-      :'<td class="qt-final-col"><span class="qt-edge qe-neu">—</span></td>';
+      :`<td class="qt-final-col"><span class="qt-sub">${staleLive?'stale mkt':'—'}</span></td>`;
     qtrHtml=`
     <div class="qtr-block">
       <div class="qtr-hdr">
         <div class="qtr-title">⏱ Quarter-by-Quarter</div>
-        <div class="qtr-note">model scores${hasActual?' + actuals':''} · Kalshi 3-way de-vigged</div>
+        <div class="qtr-note">${(live&&g.isLive)?`live re-prediction${kalshiIsLive?' · Kalshi live':' · Kalshi prices are a pregame snapshot'}`:`model scores${hasActual?' + actuals':''} · Kalshi 3-way de-vigged`}</div>
       </div>
       <div class="qtr-scroll"><table class="qtr-table">
         <tr><th></th>${th}</tr>
@@ -1028,9 +1165,21 @@ function renderGame(g, model, kGame, kQtrs){
 
   // ── edge summary row: Vegas EV is primary (user bets sportsbooks), Kalshi reference ──
   const vBet=bestVegasBet(model,g);
-  const gameEdge=(kGame&&model)?model.pHomeGame-kGame.homeP:null;
+  const gameEdge=(kGame&&model)?((live&&g.isLive)?live.pHome:model.pHomeGame)-kGame.homeP:null;
   let edgeBadge;
-  if(vBet){
+  if(live&&g.isLive){
+    // In-play the pregame Vegas price is stale, so the only meaningful
+    // comparison is a LIVE market. The Kalshi snapshot is up to 30 min old and
+    // holds pregame prices — comparing against it manufactures fake edges, so
+    // an edge is only shown when the prices were fetched live.
+    if(gameEdge!=null&&kalshiIsLive){
+      const abs=Math.abs(gameEdge), side=gameEdge>0?g.homeAbbr:g.awayAbbr;
+      edgeBadge=abs>=0.06?`<span class="edge-badge edge-pos">LIVE: ${side} +${(abs*100).toFixed(1)}¢ vs Kalshi</span>`
+        :`<span class="edge-badge edge-neu">LIVE: model within ${(abs*100).toFixed(1)}¢ of Kalshi</span>`;
+    }else{
+      edgeBadge='<span class="edge-badge edge-neu">Live model running · no live market price to compare</span>';
+    }
+  }else if(vBet){
     const evPct=(vBet.ev*100).toFixed(1);
     edgeBadge=vBet.ev>=0.05?`<span class="edge-badge edge-pos">VALUE vs Vegas: ${vBet.side} ${fmtML(vBet.ml)} → +${evPct}% EV</span>`
       :vBet.ev>=0.02?`<span class="edge-badge edge-neu">${vBet.side} ${fmtML(vBet.ml)} → +${evPct}% EV (thin)</span>`
@@ -1112,6 +1261,7 @@ function renderGame(g, model, kGame, kQtrs){
         <span class="team-record">${g.homeRec} ${b2bH}${injChipH}</span>
       </div>
     </div>
+    ${liveHtml}
     ${consensusHtml}
     ${sourcesHtml}
     ${qtrHtml}
@@ -1164,6 +1314,7 @@ async function init(){
   document.getElementById('status-banner').style.display='none';
   document.getElementById('games-hdr').style.display='flex';
   document.getElementById('badge-count').textContent=`${games.length} game${games.length!==1?'s':''}`;
+  kalshiIsLive=(kalshi.source==='live');
   let mktTxt=`${kalshi.marketCount} Kalshi markets`;
   if(kalshi.source==='snapshot'&&kalshi.fetchedAt){
     const ageMin=Math.max(0,Math.round((Date.now()-new Date(kalshi.fetchedAt).getTime())/60000));
@@ -1204,6 +1355,15 @@ async function init(){
   plays.sort((x,y)=>y.ev-x.ev);
   document.getElementById('games').innerHTML=renderBestBets(plays)+html;
   renderTrackBar();
+  scheduleLiveRefresh(games);
+}
+
+// ── auto-refresh while any game is in progress ──────────────────
+let _liveTimer=null;
+function scheduleLiveRefresh(games){
+  if(_liveTimer){ clearTimeout(_liveTimer); _liveTimer=null; }
+  if(!games.some(g=>g.isLive)) return;
+  _liveTimer=setTimeout(()=>{ init(); }, 45000);   // 45s while live
 }
 
 // ── Best Bets: moneyline plays where model EV vs DraftKings ≥ +3% ──
