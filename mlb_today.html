@@ -2053,23 +2053,49 @@ async function showKalshiDebug(){
 // Public Kalshi fetch — no auth headers (market data endpoints are fully public)
 async function kalshiPublicFetch(path){
   const url = KALSHI_BASE + path;
-  // Kalshi blocks cross-origin browser calls (no CORS). Prefer your own
-  // Cloudflare Worker proxy (reliable); fall back to public proxies.
-  const attempts = [
-    ...(KALSHI_PROXY ? [KALSHI_PROXY + '?path=' + encodeURIComponent(path)] : []),
-    url,
-    'https://api.allorigins.win/raw?url=' + encodeURIComponent(url),
-    'https://api.codetabs.com/v1/proxy/?quest=' + encodeURIComponent(url),
-  ];
+  // Per-attempt timeout keeps the whole chain well under loadGames' 12s cap,
+  // so the snapshot fallback still lands in the initial render.
+  const tryFetch = async u => {
+    const r = await fetch(u, {headers:{'Accept':'application/json'}, signal: AbortSignal.timeout(4000)});
+    if(!r.ok) throw new Error(`Kalshi ${r.status}`);
+    return r.json();
+  };
   let lastErr;
-  for(const u of attempts){
-    try{
-      const r = await fetch(u, {headers:{'Accept':'application/json'}});
-      if(!r.ok) throw new Error(`Kalshi ${r.status}`);
-      return await r.json();
-    }catch(e){ lastErr = e; }
+  // Fast routes: own Cloudflare Worker proxy, then direct (CORS-blocked from
+  // GitHub Pages but fails fast, and works when served without an Origin).
+  for(const u of [...(KALSHI_PROXY ? [KALSHI_PROXY + '?path=' + encodeURIComponent(path)] : []), url]){
+    try{ return await tryFetch(u); }catch(e){ lastErr = e; }
+  }
+  // Same-origin snapshot committed by the scheduled GitHub Action
+  // (data/kalshi_mlb.json, refreshed every 30 min during game hours) —
+  // same pattern as the WNBA page. Preferred over slow public proxies.
+  const snap = await kalshiSnapshotFetch(path);
+  if(snap) return snap;
+  // Last resort: public CORS proxies (slow and often rate-limited).
+  for(const u of ['https://api.allorigins.win/raw?url=' + encodeURIComponent(url),
+                  'https://api.codetabs.com/v1/proxy/?quest=' + encodeURIComponent(url)]){
+    try{ return await tryFetch(u); }catch(e){ lastErr = e; }
   }
   throw lastErr || new Error('Kalshi fetch failed');
+}
+
+let _kSnapPromise = null;
+async function kalshiSnapshotFetch(path){
+  const ser = /[?&]series_ticker=([A-Z0-9]+)/.exec(path);
+  if(!ser) return null;
+  try{
+    if(!_kSnapPromise)
+      _kSnapPromise = fetch('data/kalshi_mlb.json?cb='+Date.now())
+        .then(r=>{ if(!r.ok) throw new Error(`snapshot ${r.status}`); return r.json(); });
+    const snap = await _kSnapPromise;
+    let markets = (snap.markets||{})[ser[1]];
+    if(!markets) return null;
+    // The live call filters min_close_ts server-side; replicate on close_time.
+    const ts = /[?&]min_close_ts=(\d+)/.exec(path);
+    if(ts) markets = markets.filter(m=>!m.close_time || Date.parse(m.close_time)/1000 >= +ts[1]);
+    _kalshiDebug.results.push(`snapshot ${ser[1]}: ${markets.length} markets (as of ${snap.fetched_at})`);
+    return {markets, _snapshot:true, fetched_at:snap.fetched_at};
+  }catch(e){ _kSnapPromise = null; return null; }
 }
 
 async function fetchKalshiMarkets(){

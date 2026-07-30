@@ -1,14 +1,15 @@
-name: Kalshi WNBA snapshot
+name: Kalshi snapshot
 
 on:
   schedule:
-    # every 30 min, 14:00-03:30 UTC (roughly 10am-11:30pm ET, WNBA hours)
+    # every 30 min, 14:00-03:30 UTC (roughly 10am-11:30pm ET, MLB/WNBA hours)
     - cron: '*/30 14-23 * * *'
     - cron: '*/30 0-3 * * *'
   workflow_dispatch:
   push:
     paths:
       - 'scripts/fetch_kalshi_wnba.py'
+      - 'scripts/fetch_kalshi_mlb.py'
       - '.github/workflows/kalshi-snapshot.yml'
 
 permissions:
@@ -24,12 +25,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Fetch Kalshi markets
-        run: python scripts/fetch_kalshi_wnba.py
+        run: |
+          python scripts/fetch_kalshi_wnba.py
+          python scripts/fetch_kalshi_mlb.py
       - name: Commit snapshot if changed
         run: |
           git config user.name "kalshi-snapshot-bot"
           git config user.email "actions@github.com"
-          git add data/kalshi_wnba.json
+          git add data/kalshi_wnba.json data/kalshi_mlb.json
           if git diff --cached --quiet; then
             echo "no changes"
           else
