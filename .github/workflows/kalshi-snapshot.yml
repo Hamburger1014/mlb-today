@@ -1,0 +1,39 @@
+name: Kalshi WNBA snapshot
+
+on:
+  schedule:
+    # every 30 min, 14:00-03:30 UTC (roughly 10am-11:30pm ET, WNBA hours)
+    - cron: '*/30 14-23 * * *'
+    - cron: '*/30 0-3 * * *'
+  workflow_dispatch:
+  push:
+    paths:
+      - 'scripts/fetch_kalshi_wnba.py'
+      - '.github/workflows/kalshi-snapshot.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: kalshi-snapshot
+  cancel-in-progress: true
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch Kalshi markets
+        run: python scripts/fetch_kalshi_wnba.py
+      - name: Commit snapshot if changed
+        run: |
+          git config user.name "kalshi-snapshot-bot"
+          git config user.email "actions@github.com"
+          git add data/kalshi_wnba.json
+          if git diff --cached --quiet; then
+            echo "no changes"
+          else
+            git commit -m "Kalshi WNBA snapshot"
+            git pull --rebase origin main
+            git push
+          fi

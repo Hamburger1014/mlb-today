@@ -487,58 +487,57 @@ async function loadB2B(){
 //  KALSHI FETCHING (public market data — no auth)
 // ═══════════════════════════════════════════════════════════════
 async function kalshiFetch(path){
-  const url=KALSHI_BASE+path;
-  try{
-    const r=await fetch(url,{headers:{'Accept':'application/json'}});
-    if(!r.ok) throw new Error(`Kalshi ${r.status}`);
-    return r.json();
-  }catch(e){
-    // file:// origin gets blocked by CORS — retry via proxy
-    const r2=await fetch('https://corsproxy.io/?'+encodeURIComponent(url),
-      {headers:{'Accept':'application/json'}});
-    if(!r2.ok) throw new Error(`Kalshi proxy ${r2.status}`);
-    return r2.json();
-  }
+  const r=await fetch(KALSHI_BASE+path,{headers:{'Accept':'application/json'}});
+  if(!r.ok) throw new Error(`Kalshi ${r.status}`);
+  return r.json();
 }
 
-// Returns {game: {pairKey→event}, quarters: [ {pairKey→event} ×4 ], marketCount}
+// Returns {game:{pairKey→event}, quarters:[{pairKey→event}×4], marketCount, source, fetchedAt}
+// Live Kalshi is CORS-blocked from GitHub Pages, so a scheduled GitHub Action
+// snapshots the same market data to data/kalshi_wnba.json (same-origin fallback).
 async function fetchKalshi(){
-  const out={game:{}, quarters:[{},{},{},{}], marketCount:0};
-  // event pairKey = sorted "ABBR|ABBR" from market yes_sub_title city names
+  const ALL_SERIES=['KXWNBAGAME',...QTR_SERIES];
+  let lists=null, source='live', fetchedAt=null;
+  try{
+    lists={};
+    await Promise.all(ALL_SERIES.map(async st=>{
+      const d=await kalshiFetch(`/markets?series_ticker=${st}&status=open&limit=200`);
+      lists[st]=d.markets||[];
+    }));
+  }catch(e){
+    console.warn('Live Kalshi blocked ('+e.message+') — trying snapshot');
+    try{
+      const r=await fetch('data/kalshi_wnba.json?cb='+Date.now());
+      if(!r.ok) throw new Error(`snapshot ${r.status}`);
+      const snap=await r.json();
+      lists=snap.markets; fetchedAt=snap.fetched_at; source='snapshot';
+    }catch(e2){
+      console.warn('Kalshi snapshot also unavailable:',e2);
+      return {game:{},quarters:[{},{},{},{}],marketCount:0,source:'none',fetchedAt:null};
+    }
+  }
+  const out={game:{}, quarters:[{},{},{},{}], marketCount:0, source, fetchedAt};
+  // pairKey = sorted "ABBR|ABBR" from market yes_sub_title city names
   function eventPairKey(markets){
     const abbrs=new Set();
     for(const m of markets){
       const ab=KALSHI_CITY[m.yes_sub_title]; if(ab) abbrs.add(ab);
     }
-    if(abbrs.size!==2) return null;
-    return [...abbrs].sort().join('|');
+    return abbrs.size===2?[...abbrs].sort().join('|'):null;
   }
-  function groupMarkets(markets){
+  function groupByEvent(markets){
     const byEvent={};
-    for(const m of markets||[]){
-      (byEvent[m.event_ticker]=byEvent[m.event_ticker]||[]).push(m);
-    }
+    for(const m of markets||[]) (byEvent[m.event_ticker]=byEvent[m.event_ticker]||[]).push(m);
     return byEvent;
   }
-  // Game winner series (events endpoint gives nested markets)
-  try{
-    const d=await kalshiFetch('/events?series_ticker=KXWNBAGAME&status=open&with_nested_markets=true&limit=200');
-    for(const ev of d.events||[]){
-      const key=eventPairKey(ev.markets||[]);
-      if(key){ out.game[key]={ticker:ev.event_ticker, markets:ev.markets}; out.marketCount+=(ev.markets||[]).length; }
+  function fill(target, markets){
+    for(const [ticker,mkts] of Object.entries(groupByEvent(markets))){
+      const key=eventPairKey(mkts);
+      if(key){ target[key]={ticker, markets:mkts}; out.marketCount+=mkts.length; }
     }
-  }catch(e){ console.warn('Kalshi game markets failed:',e); }
-  // Quarter winner series (flat market lists)
-  await Promise.all(QTR_SERIES.map(async (st,qi)=>{
-    try{
-      const d=await kalshiFetch(`/markets?series_ticker=${st}&status=open&limit=200`);
-      const byEvent=groupMarkets(d.markets);
-      for(const [ticker,mkts] of Object.entries(byEvent)){
-        const key=eventPairKey(mkts);
-        if(key){ out.quarters[qi][key]={ticker, markets:mkts}; out.marketCount+=mkts.length; }
-      }
-    }catch(e){ console.warn(`Kalshi ${st} failed:`,e); }
-  }));
+  }
+  fill(out.game, lists['KXWNBAGAME']);
+  QTR_SERIES.forEach((st,qi)=>fill(out.quarters[qi], lists[st]));
   return out;
 }
 
@@ -931,7 +930,12 @@ async function init(){
   document.getElementById('status-banner').style.display='none';
   document.getElementById('games-hdr').style.display='flex';
   document.getElementById('badge-count').textContent=`${games.length} game${games.length!==1?'s':''}`;
-  document.getElementById('badge-mkts').textContent=`${kalshi.marketCount} Kalshi markets`;
+  let mktTxt=`${kalshi.marketCount} Kalshi markets`;
+  if(kalshi.source==='snapshot'&&kalshi.fetchedAt){
+    const ageMin=Math.max(0,Math.round((Date.now()-new Date(kalshi.fetchedAt).getTime())/60000));
+    mktTxt+=` · snapshot ${ageMin}m ago`;
+  }
+  document.getElementById('badge-mkts').textContent=mktTxt;
   renderTrackBar();
 
   if(!games.length){
