@@ -3495,7 +3495,12 @@ function parseEvent(evt){
   const st=(comp.status&&comp.status.type&&comp.status.type.name)||'';
   let inlineOdds=null;
   for(const o of comp.odds||[]){
-    const hML=o.homeTeamOdds&&o.homeTeamOdds.moneyLine, aML=o.awayTeamOdds&&o.awayTeamOdds.moneyLine;
+    // MLB-style flat moneylines, or basketball-style nested moneyline.{home,away}.close.odds
+    let hML=o.homeTeamOdds&&o.homeTeamOdds.moneyLine, aML=o.awayTeamOdds&&o.awayTeamOdds.moneyLine;
+    if(hML==null&&o.moneyline){
+      const pick=s=>{const v=s&&((s.close&&s.close.odds)||(s.open&&s.open.odds));return v!=null?parseFloat(String(v).replace('+','')):null;};
+      hML=pick(o.moneyline.home); aML=pick(o.moneyline.away);
+    }
     if(hML!=null&&aML!=null){
       const hR=mlToRawProb(hML),aR=mlToRawProb(aML);
       if(hR&&aR){const t=hR+aR;inlineOdds={homeP:hR/t,awayP:aR/t,provider:(o.provider&&o.provider.name)||'Vegas',overUnder:o.overUnder};break;}
