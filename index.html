@@ -4069,16 +4069,39 @@ async function load(){
     return;
   }
   let html='';
+  const plays=[];
   for(const g of games){
     const model=predictGame(g.homeAbbr,g.awayAbbr);
     const key=[g.homeAbbr,g.awayAbbr].sort().join('|');
     const kGame=kGameProbs(kalshi.game[key],g.homeAbbr,g.awayAbbr);
     const kQtrs=kalshi.quarters.map(qm=>kQtrProbs(qm[key],g.homeAbbr,g.awayAbbr));
     logPrediction(g,model,kGame,kQtrs);
+    const vBet=bestVegasBet(model,g);
+    if(!g.isFinal&&!g.isLive&&vBet&&vBet.ev>=0.03){
+      const b=mlPayout(vBet.ml);
+      plays.push({matchup:`${g.awayAbbr}@${g.homeAbbr}`, side:vBet.side, ml:vBet.ml,
+        ev:vBet.ev, p:vBet.p, kelly:Math.min(0.05, vBet.ev/b/4)});
+    }
     html+=renderGame(g,model,kGame,kQtrs);
   }
-  document.getElementById('wnba-games').innerHTML=html;
+  plays.sort((x,y)=>y.ev-x.ev);
+  document.getElementById('wnba-games').innerHTML=renderBestBets(plays)+html;
   renderTrackBar();
+}
+
+// ── Best Bets: moneyline plays where model EV vs DraftKings ≥ +3% ──
+function renderBestBets(plays){
+  const s=trackStats();
+  const roi=(s&&s.vgN)
+    ?`<div class="bb-foot">📊 Realized: <b>${s.vgHit}–${s.vgN-s.vgHit}</b> · ROI <b>${s.vgROI>=0?'+':''}${(s.vgROI/s.vgN*100).toFixed(0)}%</b> over ${s.vgN} settled bets (1u each at the logged line, auto-graded from finals).</div>`
+    :'<div class="bb-foot">📊 Realized ROI appears here once flagged bets settle — auto-graded from final scores.</div>';
+  const sub='<span style="font-weight:400;opacity:.6;font-size:.62rem">vs DraftKings moneyline</span>';
+  if(!plays.length)
+    return `<div class="best-bets"><div class="bb-title">🎯 WNBA Best Bets ${sub}</div><div class="bb-empty">No +EV moneyline plays today — the model agrees with Vegas. Sitting out is a position too.</div>${roi}</div>`;
+  let rows='';
+  for(const b of plays)
+    rows+=`<div class="bb-row"><span class="bb-mu">${b.matchup}</span><span class="bb-pick">${b.side} ML ${fmtML(b.ml)}</span><span class="bb-edge">+${(b.ev*100).toFixed(1)}% EV</span><span class="bb-ok">model ${wPct(b.p)}</span><span class="bb-stake">${(b.kelly*100).toFixed(1)}% bankroll (¼-Kelly)</span></div>`;
+  return `<div class="best-bets"><div class="bb-title">🎯 WNBA Best Bets <span class="bb-count">${plays.length}</span> ${sub}</div>${rows}<div class="bb-foot">Play = model win prob beats the line's implied prob by ≥3% EV after vig. Stake = quarter-Kelly, capped at 5%. Injury-aware model, 67.3% walk-forward — but treat flags as experimental until the realized line below proves out. Not financial advice.</div>${roi}</div>`;
 }
 
 return {load,toggleCard,exportLog};
