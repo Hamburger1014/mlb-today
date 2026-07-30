@@ -257,6 +257,9 @@
     .bb-mu{font-weight:700;color:var(--dim2);min-width:78px}
     .bb-pick{font-weight:800;color:var(--text)}
     .bb-edge{color:var(--green);font-weight:700}
+    .bb-type{font-size:.6rem;font-weight:800;padding:1px 6px;border-radius:6px;letter-spacing:.05em}
+    .bb-type-ml{background:rgba(58,138,232,.18);color:#60a5fa;border:1px solid rgba(58,138,232,.3)}
+    .bb-type-sp{background:rgba(20,184,166,.18);color:#2dd4bf;border:1px solid rgba(20,184,166,.3)}
     .bb-ok{color:var(--green);font-size:.7rem}
     .bb-stake{color:var(--dim);font-size:.74rem;margin-left:auto}
     .bb-foot{font-size:.66rem;color:var(--dim2);margin-top:8px;line-height:1.4}
@@ -350,6 +353,11 @@ const KALSHI_BASE = 'https://api.elections.kalshi.com/trade-api/v2';
 const FIT = {
   halfLife:25, priorW0:4, priorR:0.6, shrinkK:8, lgFallback:83.0,
   margin:{eff:1.0993, homeEdge:1.855, b2b:-0.956, injMiss:-0.1793, sd:12.33},
+  // Spreads settle on the FINAL score (incl. OT); regressing final margin on
+  // this model's μ gives slope 1.006 / intercept −0.04, so μ is usable as-is
+  // with the final-margin residual σ. Validated: residuals near-normal
+  // (skew 0.07), σ constant across projected margins (no heteroscedasticity).
+  spreadSd:12.39,
   total: {eff:1.1584, intercept:-24.42, b2b:0.645, injMiss:-0.0633},
   winProbK:0.1461,
   quarters:[
@@ -438,8 +446,18 @@ function parseScoreboardEvent(evt){
   const awayC=(comp.competitors||[]).find(c=>c.homeAway==='away');
   if(!homeC||!awayC) return null;
   const st=comp.status?.type?.name||'';
-  let inlineOdds=null;
+  let inlineOdds=null, spread=null;
   for(const o of comp.odds||[]){
+    // Spread: per-side signed line + real juice (e.g. home "+12.5" at "-114")
+    if(!spread&&o.pointSpread){
+      const pick=s=>{
+        const c=s&&(s.close||s.open); if(!c) return null;
+        const line=parseFloat(c.line), odds=parseFloat(c.odds);
+        return (isNaN(line)||isNaN(odds))?null:{line,odds};
+      };
+      const sh=pick(o.pointSpread.home), sa=pick(o.pointSpread.away);
+      if(sh&&sa) spread={home:sh,away:sa,provider:o.provider?.name||'Vegas'};
+    }
     // MLB-style flat moneylines, or basketball-style nested moneyline.{home,away}.close.odds
     let hML=o.homeTeamOdds?.moneyLine, aML=o.awayTeamOdds?.moneyLine;
     if(hML==null&&o.moneyline){
@@ -466,7 +484,7 @@ function parseScoreboardEvent(evt){
     awayRec:(awayC.records||[]).find(r=>r.type==='total')?.summary||'',
     homeScore:+homeC.score||0, awayScore:+awayC.score||0,
     homeLines:lines(homeC), awayLines:lines(awayC),
-    gameDate:evt.date||null, venue:comp.venue?.fullName||'',
+    gameDate:evt.date||null, venue:comp.venue?.fullName||'', spread,
     isLive:st.includes('IN_PROGRESS')||st.includes('LIVE')||st.includes('HALFTIME')||st.includes('END_PERIOD'),
     isFinal:st.includes('FINAL'),
     statusTxt:comp.status?.type?.shortDetail||'',
@@ -717,6 +735,9 @@ function logPrediction(g, model, kGame, kQtrs){
     },
     vegas:(g.inlineOdds&&g.inlineOdds.homeML!=null)
       ?{homeML:g.inlineOdds.homeML, awayML:g.inlineOdds.awayML}:null,
+    spread:g.spread?{homeLine:g.spread.home.line, homeOdds:g.spread.home.odds,
+                     awayLine:g.spread.away.line, awayOdds:g.spread.away.odds}:null,
+    mu:model?+model.mu.toFixed(2):null,
     result:null,
   });
   saveLog();
@@ -747,7 +768,7 @@ async function resolveLog(){
 function trackStats(){
   const done=predLog.filter(e=>e.result);
   if(!done.length) return null;
-  let gN=0,gHit=0, qN=0,qHit=0, vN=0,vHit=0, vgN=0,vgHit=0,vgROI=0;
+  let gN=0,gHit=0, qN=0,qHit=0, vN=0,vHit=0, vgN=0,vgHit=0,vgROI=0, spN=0,spHit=0,spROI=0;
   for(const e of done){
     gN++; if((e.model.game>=0.5)===!!e.result.homeWon) gHit++;
     // Kalshi disagreement record (reference)
@@ -770,6 +791,24 @@ function trackStats(){
         if(won){ vgHit++; vgROI+=mlPayout(best.ml); } else vgROI-=1;
       }
     }
+    // Spread flags: grade the side the model would have taken at ≥4% EV
+    if(e.spread&&e.mu!=null){
+      const {pHome,pAway,pPush}=spreadProbs(e.mu,e.spread.homeLine);
+      const opts=[
+        {isHome:1,line:e.spread.homeLine,ml:e.spread.homeOdds,p:pHome},
+        {isHome:0,line:e.spread.awayLine,ml:e.spread.awayOdds,p:pAway},
+      ].map(o=>({...o,ev:betEV(o.p,pPush,o.ml)}));
+      opts.sort((x,y)=>y.ev-x.ev);
+      const pick=opts[0];
+      if(pick.ev>=0.04){
+        const margin=e.result.homeScore-e.result.awayScore;   // final, incl OT
+        const adj=(pick.isHome?margin:-margin)+pick.line;      // >0 cover, =0 push
+        if(Math.abs(adj)>1e-9){
+          spN++;
+          if(adj>0){ spHit++; spROI+=mlPayout(pick.ml); } else spROI-=1;
+        }
+      }
+    }
     for(let i=0;i<4;i++){
       const q=e.model.q[i], rh=e.result.qHome?.[i], ra=e.result.qAway?.[i];
       if(q==null||rh==null||ra==null) continue;
@@ -779,7 +818,7 @@ function trackStats(){
       if(pick===actual) qHit++;
     }
   }
-  return {gN,gHit,qN,qHit,vN,vHit,vgN,vgHit,vgROI};
+  return {gN,gHit,qN,qHit,vN,vHit,vgN,vgHit,vgROI,spN,spHit,spROI};
 }
 
 function renderTrackBar(){
@@ -793,7 +832,8 @@ function renderTrackBar(){
     const pct=(h,n)=>n?` <span class="${h/n>=0.5?'track-good':'track-bad'}">${Math.round(h/n*100)}%</span>`:'';
     html+=`<span class="track-stat">Game picks: <b>${s.gHit}/${s.gN}</b>${pct(s.gHit,s.gN)}</span>`;
     html+=`<span class="track-stat">Quarter picks: <b>${s.qHit}/${s.qN}</b>${pct(s.qHit,s.qN)}</span>`;
-    if(s.vgN) html+=`<span class="track-stat">Vegas value bets (≥3% EV): <b>${s.vgHit}/${s.vgN}</b> · ROI <b class="${s.vgROI>=0?'track-good':'track-bad'}">${s.vgROI>=0?'+':''}${(s.vgROI/s.vgN*100).toFixed(0)}%</b></span>`;
+    if(s.vgN) html+=`<span class="track-stat">ML value bets (≥3% EV): <b>${s.vgHit}/${s.vgN}</b> · ROI <b class="${s.vgROI>=0?'track-good':'track-bad'}">${s.vgROI>=0?'+':''}${(s.vgROI/s.vgN*100).toFixed(0)}%</b></span>`;
+    if(s.spN) html+=`<span class="track-stat">Spread bets (≥4% EV): <b>${s.spHit}/${s.spN}</b> · ROI <b class="${s.spROI>=0?'track-good':'track-bad'}">${s.spROI>=0?'+':''}${(s.spROI/s.spN*100).toFixed(0)}%</b></span>`;
     if(s.vN) html+=`<span class="track-stat">vs Kalshi (≥5¢): <b>${s.vHit}/${s.vN}</b>${pct(s.vHit,s.vN)}</span>`;
   }
   if(pending) html+=`<span class="track-stat" style="color:var(--dim2)">${pending} pending</span>`;
@@ -832,6 +872,33 @@ function vegasEV(pModel, ml){
   const b=mlPayout(ml);
   return pModel*b-(1-pModel);   // EV per $1 staked
 }
+// ── Spread pricing ──────────────────────────────────────────────
+// Home covers when margin > −homeLine. Whole-number lines can PUSH
+// (3–7% of margins land on each integer), so pushes are modeled with a
+// ±0.5 continuity band rather than ignored.
+function spreadProbs(mu, homeLine){
+  const sd=FIT.spreadSd, thr=-homeLine;
+  if(Math.abs(thr-Math.round(thr))<1e-9){
+    const pPush=normCdf(thr+0.5,mu,sd)-normCdf(thr-0.5,mu,sd);
+    return {pHome:1-normCdf(thr+0.5,mu,sd), pAway:normCdf(thr-0.5,mu,sd), pPush};
+  }
+  const pHome=1-normCdf(thr,mu,sd);
+  return {pHome, pAway:1-pHome, pPush:0};
+}
+// EV per $1 with push refunding the stake
+function betEV(p,pPush,ml){ return p*mlPayout(ml)-(1-p-pPush); }
+function fmtLine(l){ return l>0?'+'+l:String(l); }
+function bestSpreadBet(model,g){
+  if(!model||!g.spread) return null;
+  const {pHome,pAway,pPush}=spreadProbs(model.mu, g.spread.home.line);
+  const opts=[
+    {side:g.homeAbbr,line:g.spread.home.line,ml:g.spread.home.odds,p:pHome},
+    {side:g.awayAbbr,line:g.spread.away.line,ml:g.spread.away.odds,p:pAway},
+  ].map(o=>({...o,pPush,ev:betEV(o.p,pPush,o.ml)}));
+  opts.sort((x,y)=>y.ev-x.ev);
+  return opts[0];
+}
+
 function bestVegasBet(model,g){
   if(!model||!g.inlineOdds||g.inlineOdds.homeML==null) return null;
   const sides=[
@@ -1002,6 +1069,11 @@ function renderGame(g, model, kGame, kQtrs){
         <div class="kd-row"><span>${g.homeAbbr} key scorers out</span><span>${injH?`${injH.names.map(n=>n.name).join(', ')} (−${injH.miss.toFixed(1)} ppg)`:'none material'}</span></div>
         <div class="kd-row"><span>Expected margin</span><span>${model?(model.mu>0?g.homeAbbr:g.awayAbbr)+' by '+Math.abs(model.mu).toFixed(1):'—'}</span></div>
         <div class="kd-row"><span>Projected total</span><span>${model?(model.expH+model.expA).toFixed(0):'—'}${g.inlineOdds?.overUnder?` (Vegas O/U ${g.inlineOdds.overUnder})`:''}</span></div>
+        ${(model&&g.spread)?(()=>{
+          const sp=spreadProbs(model.mu,g.spread.home.line);
+          return `<div class="kd-row"><span>Vegas spread</span><span>${g.homeAbbr} ${fmtLine(g.spread.home.line)} (${fmtML(g.spread.home.odds)}) · ${g.awayAbbr} ${fmtLine(g.spread.away.line)} (${fmtML(g.spread.away.odds)})</span></div>
+          <div class="kd-row"><span>Model cover prob</span><span>${g.homeAbbr} ${fmtPct(sp.pHome,1)} · ${g.awayAbbr} ${fmtPct(sp.pAway,1)}${sp.pPush>0.005?` · push ${fmtPct(sp.pPush,1)}`:''}</span></div>`;
+        })():''}
       </div>
     </div>
     ${kGame?`<div class="kalshi-detail">
@@ -1113,11 +1185,19 @@ async function init(){
     const kGame=kalshiGameProbs(kalshi.game[key],g.homeAbbr,g.awayAbbr);
     const kQtrs=kalshi.quarters.map(qmap=>kalshiQtrProbs(qmap[key],g.homeAbbr,g.awayAbbr));
     logPrediction(g,model,kGame,kQtrs);
-    const vBet=bestVegasBet(model,g);
-    if(!g.isFinal&&!g.isLive&&vBet&&vBet.ev>=0.03){
-      const b=mlPayout(vBet.ml);
-      plays.push({matchup:`${g.awayAbbr}@${g.homeAbbr}`, side:vBet.side, ml:vBet.ml,
-        ev:vBet.ev, p:vBet.p, kelly:Math.min(0.05, vBet.ev/b/4)});
+    if(!g.isFinal&&!g.isLive){
+      const mu=`${g.awayAbbr}@${g.homeAbbr}`;
+      const vBet=bestVegasBet(model,g);
+      if(vBet&&vBet.ev>=0.03)
+        plays.push({type:'ML', matchup:mu, side:vBet.side, ml:vBet.ml, ev:vBet.ev, p:vBet.p,
+          label:`${vBet.side} ML ${fmtML(vBet.ml)}`, kelly:Math.min(0.05,vBet.ev/mlPayout(vBet.ml)/4)});
+      // Spreads use a higher bar (4%): the margin distribution calibrates to
+      // ~1 pt, which is ~3% of probability — comparable to the edge itself.
+      const sBet=bestSpreadBet(model,g);
+      if(sBet&&sBet.ev>=0.04)
+        plays.push({type:'SPREAD', matchup:mu, side:sBet.side, ml:sBet.ml, ev:sBet.ev, p:sBet.p,
+          label:`${sBet.side} ${fmtLine(sBet.line)} (${fmtML(sBet.ml)})`,
+          kelly:Math.min(0.05,sBet.ev/mlPayout(sBet.ml)/4)});
     }
     html+=renderGame(g,model,kGame,kQtrs);
   }
@@ -1129,16 +1209,23 @@ async function init(){
 // ── Best Bets: moneyline plays where model EV vs DraftKings ≥ +3% ──
 function renderBestBets(plays){
   const s=trackStats();
-  const roi=(s&&s.vgN)
-    ?`<div class="bb-foot">📊 Realized: <b>${s.vgHit}–${s.vgN-s.vgHit}</b> · ROI <b>${s.vgROI>=0?'+':''}${(s.vgROI/s.vgN*100).toFixed(0)}%</b> over ${s.vgN} settled bets (1u each at the logged line, auto-graded from finals).</div>`
+  const parts=[];
+  if(s&&s.vgN) parts.push(`ML <b>${s.vgHit}–${s.vgN-s.vgHit}</b> · ROI <b>${s.vgROI>=0?'+':''}${(s.vgROI/s.vgN*100).toFixed(0)}%</b>`);
+  if(s&&s.spN) parts.push(`Spread <b>${s.spHit}–${s.spN-s.spHit}</b> · ROI <b>${s.spROI>=0?'+':''}${(s.spROI/s.spN*100).toFixed(0)}%</b>`);
+  const roi=parts.length
+    ?`<div class="bb-foot">📊 Realized (1u each at the logged price, auto-graded from finals, pushes void): ${parts.join(' · ')}</div>`
     :'<div class="bb-foot">📊 Realized ROI appears here once flagged bets settle — auto-graded from final scores.</div>';
-  const sub='<span style="font-weight:400;opacity:.6;font-size:.62rem">vs DraftKings moneyline</span>';
+  const sub='<span style="font-weight:400;opacity:.6;font-size:.62rem">moneyline + spread vs DraftKings</span>';
   if(!plays.length)
-    return `<div class="best-bets"><div class="bb-title">🎯 WNBA Best Bets ${sub}</div><div class="bb-empty">No +EV moneyline plays today — the model agrees with Vegas. Sitting out is a position too.</div>${roi}</div>`;
+    return `<div class="best-bets"><div class="bb-title">🎯 WNBA Best Bets ${sub}</div><div class="bb-empty">No +EV moneyline or spread plays today — the model agrees with Vegas. Sitting out is a position too.</div>${roi}</div>`;
   let rows='';
-  for(const b of plays)
-    rows+=`<div class="bb-row"><span class="bb-mu">${b.matchup}</span><span class="bb-pick">${b.side} ML ${fmtML(b.ml)}</span><span class="bb-edge">+${(b.ev*100).toFixed(1)}% EV</span><span class="bb-ok">model ${fmtPct(b.p)}</span><span class="bb-stake">${(b.kelly*100).toFixed(1)}% bankroll (¼-Kelly)</span></div>`;
-  return `<div class="best-bets"><div class="bb-title">🎯 WNBA Best Bets <span class="bb-count">${plays.length}</span> ${sub}</div>${rows}<div class="bb-foot">Play = model win prob beats the line's implied prob by ≥3% EV after vig. Stake = quarter-Kelly, capped at 5%. Injury-aware model, 67.3% walk-forward — but treat flags as experimental until the realized line below proves out. Not financial advice.</div>${roi}</div>`;
+  for(const b of plays){
+    const tag=b.type==='SPREAD'
+      ?'<span class="bb-type bb-type-sp">SPREAD</span>':'<span class="bb-type bb-type-ml">ML</span>';
+    const push=b.pPush>0.005?` <span class="qt-sub" style="display:inline">push ${fmtPct(b.pPush)}</span>`:'';
+    rows+=`<div class="bb-row"><span class="bb-mu">${b.matchup}</span>${tag}<span class="bb-pick">${b.label}</span><span class="bb-edge">+${(b.ev*100).toFixed(1)}% EV</span><span class="bb-ok">model ${fmtPct(b.p)}${push}</span><span class="bb-stake">${(b.kelly*100).toFixed(1)}% bankroll (¼-Kelly)</span></div>`;
+  }
+  return `<div class="best-bets"><div class="bb-title">🎯 WNBA Best Bets <span class="bb-count">${plays.length}</span> ${sub}</div>${rows}<div class="bb-foot">Play = model probability beats the price's implied probability after vig — ≥3% EV for moneylines, ≥4% for spreads (the margin distribution only calibrates to ~1 point, which is worth ~3% of probability, so spread edges carry more model risk). Whole-number spreads price the push explicitly. Stake = quarter-Kelly, capped at 5%. Treat flags as experimental until the realized line below proves out. Not financial advice.</div>${roi}</div>`;
 }
 
 init();
