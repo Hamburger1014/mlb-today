@@ -306,8 +306,26 @@ def main():
     entries = store.get("entries", [])
     by_id = {e["id"]: e for e in entries}
 
-    today = scoreboard()
-    print(f"scoreboard: {len(today)} games")
+    # Query explicit US dates rather than ESPN's default "today". The default
+    # rolls over on ESPN's own clock, so an overnight run (e.g. 02:43 CT) still
+    # served the PREVIOUS day's finished games and there was nothing pregame to
+    # log — that silently produced an empty log. Asking for the current US date
+    # (plus the next, for late tips) makes logging independent of when the
+    # scheduled run actually fires, which matters because GitHub delays and
+    # drops cron runs.
+    now = datetime.now(timezone.utc)
+    us_today = (now - timedelta(hours=5)).strftime("%Y%m%d")
+    us_tomorrow = (now - timedelta(hours=5) + timedelta(days=1)).strftime("%Y%m%d")
+    today = []
+    seen_ids = set()
+    for ymd in (us_today, us_tomorrow):
+        try:
+            for g in scoreboard(ymd):
+                if g["id"] not in seen_ids:
+                    seen_ids.add(g["id"]); today.append(g)
+        except Exception as ex:
+            print(f"  ! scoreboard {ymd}: {ex}")
+    print(f"scoreboard {us_today}/{us_tomorrow}: {len(today)} games")
     pregame = [g for g in today if not g["isFinal"] and not g["isLive"] and g["id"] not in by_id]
 
     # ── LOG ──
