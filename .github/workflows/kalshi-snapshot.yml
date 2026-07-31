@@ -10,6 +10,8 @@ on:
     paths:
       - 'scripts/fetch_kalshi_wnba.py'
       - 'scripts/fetch_kalshi_mlb.py'
+      - 'scripts/wnba_log.py'
+      - 'scripts/verify_wnba_parity.py'
       - '.github/workflows/kalshi-snapshot.yml'
 
 permissions:
@@ -28,15 +30,22 @@ jobs:
         run: |
           python scripts/fetch_kalshi_wnba.py
           python scripts/fetch_kalshi_mlb.py
+      # Gate: the logger reimplements the model that lives in the HTML. If the
+      # two ever drift, the logged track record stops describing what the site
+      # shows — so fail loudly rather than record predictions nobody made.
+      - name: Verify WNBA model parity (page vs logger)
+        run: python scripts/verify_wnba_parity.py
+      - name: Log & grade WNBA predictions
+        run: python scripts/wnba_log.py
       - name: Commit snapshot if changed
         run: |
           git config user.name "kalshi-snapshot-bot"
           git config user.email "actions@github.com"
-          git add data/kalshi_wnba.json data/kalshi_mlb.json
+          git add data/kalshi_wnba.json data/kalshi_mlb.json data/wnba_predictions.json
           if git diff --cached --quiet; then
             echo "no changes"
           else
-            git commit -m "Kalshi WNBA snapshot"
+            git commit -m "Kalshi snapshot + WNBA prediction log"
             git pull --rebase origin main
             git push
           fi

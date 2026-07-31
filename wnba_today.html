@@ -812,6 +812,28 @@ function kalshiQtrProbs(ev, homeAbbr, awayAbbr){
 const LOG_KEY='wnba_pred_log_v2';   // v2 = trained model (v1 entries were untrained prototype)
 let predLog=(()=>{try{return JSON.parse(localStorage.getItem(LOG_KEY)||'[]');}catch(e){return[];}})();
 function saveLog(){ try{localStorage.setItem(LOG_KEY,JSON.stringify(predLog.slice(-400)));}catch(e){} }
+
+// ── Server-side log (authoritative) ─────────────────────────────
+// A GitHub Action logs every pregame prediction and grades it from the final
+// score, so the track record no longer depends on this browser having had the
+// page open before tip-off. Server entries win; anything only this browser saw
+// is kept so nothing is lost.
+let serverLog=[], serverLogAt=null;
+async function loadServerLog(){
+  try{
+    const r=await fetch('data/wnba_predictions.json?cb='+Date.now());
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const d=await r.json();
+    serverLog=(d.entries||[]).map(e=>({...e, mu:(e.mu!=null?e.mu:(e.model&&e.model.mu))}));
+    serverLogAt=d.updated_at||null;
+  }catch(e){ serverLog=[]; serverLogAt=null; }
+}
+function mergedLog(){
+  const byId=new Map();
+  for(const e of predLog) byId.set(String(e.id),e);
+  for(const e of serverLog) byId.set(String(e.id),e);   // server wins
+  return [...byId.values()];
+}
 // US date of the game (shift UTC back 5h) — a 7pm CT tip is already tomorrow
 // in UTC, and ESPN's scoreboard is keyed by US date.
 function usGameDate(iso){
@@ -876,7 +898,7 @@ async function resolveLog(){
 }
 
 function trackStats(){
-  const done=predLog.filter(e=>e.result);
+  const done=mergedLog().filter(e=>e.result);
   if(!done.length) return null;
   let gN=0,gHit=0, qN=0,qHit=0, vN=0,vHit=0, vgN=0,vgHit=0,vgROI=0, spN=0,spHit=0,spROI=0;
   for(const e of done){
@@ -934,7 +956,7 @@ function trackStats(){
 function renderTrackBar(){
   const el=document.getElementById('track-bar');
   const s=trackStats();
-  const pending=predLog.filter(e=>!e.result).length;
+  const pending=mergedLog().filter(e=>!e.result).length;
   if(!s&&!pending){ el.style.display='none'; return; }
   el.style.display='flex';
   let html='<span>📓 <b>Prediction log</b></span>';
@@ -947,11 +969,14 @@ function renderTrackBar(){
     if(s.vN) html+=`<span class="track-stat">vs Kalshi (≥5¢): <b>${s.vHit}/${s.vN}</b>${pct(s.vHit,s.vN)}</span>`;
   }
   if(pending) html+=`<span class="track-stat" style="color:var(--dim2)">${pending} pending</span>`;
+  html+=serverLogAt
+    ? `<span class="track-stat" style="color:var(--dim2)" title="Logged and graded by a scheduled job, independent of this browser">🌐 ${serverLog.length} server-logged</span>`
+    : `<span class="track-stat" style="color:var(--dim2)" title="Server log not reachable — showing this browser's own log only">💾 this browser only</span>`;
   html+=`<button class="track-export" onclick="exportLog()">Export JSON</button>`;
   el.innerHTML=html;
 }
 function exportLog(){
-  const blob=new Blob([JSON.stringify(predLog,null,2)],{type:'application/json'});
+  const blob=new Blob([JSON.stringify(mergedLog(),null,2)],{type:'application/json'});
   const a=document.createElement('a');
   a.href=URL.createObjectURL(blob);
   a.download='wnba_prediction_log.json';
@@ -1328,7 +1353,7 @@ async function init(){
 
   step('s3','active');
   const teamsPlaying=new Set(games.flatMap(g=>[g.homeAbbr,g.awayAbbr]));
-  await Promise.all([loadB2B(), resolveLog(), loadInjuries(teamsPlaying)]);
+  await Promise.all([loadB2B(), resolveLog(), loadInjuries(teamsPlaying), loadServerLog()]);
   step('s3','done');
 
   step('s4','active');
