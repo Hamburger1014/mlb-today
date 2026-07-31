@@ -3892,6 +3892,34 @@ function candidateDates(d){
 // prediction and grades it from the final score, so the track record no longer
 // depends on this browser having had the page open before tip-off. Server
 // entries win; anything only this browser saw is kept so nothing is lost.
+// Bets actually taken (data/wnba_bets.json) — deliberately separate from the
+// model's flags. The flags are suggestions; only this ledger says whether the
+// picks made money, and it excludes anything consciously skipped.
+let betLedger=null;
+async function loadBets(){
+  try{
+    const r=await fetch('data/wnba_bets.json?cb='+Date.now());
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    betLedger=await r.json();
+  }catch(e){ betLedger=null; }
+}
+function betsHtml(){
+  if(!betLedger||!betLedger.bets||!betLedger.bets.length) return '';
+  const open=betLedger.bets.filter(b=>!b.result).length;
+  const s=betLedger.summary;
+  let txt='🎟 <b>Your bets</b>';
+  if(s&&(s.won+s.lost+s.pushed)>0){
+    const rec=`${s.won}–${s.lost}`+(s.pushed?`–${s.pushed}P`:'');
+    const cls=s.profitUnits>=0?'track-good':'track-bad';
+    txt+=`: <b>${rec}</b> · <b class="${cls}">${s.profitUnits>=0?'+':''}${s.profitUnits.toFixed(2)}u</b>`
+       + (s.roi!=null?` · ROI <b class="${cls}">${s.roi>=0?'+':''}${(s.roi*100).toFixed(0)}%</b>`:'');
+  }
+  if(open) txt+=`<span style="color:var(--dim2)"> · ${open} open</span>`;
+  const skipped=(betLedger.skipped||[]).length;
+  if(skipped) txt+=`<span style="color:var(--dim2)" title="${(betLedger.skipped[0].reason||'').replace(/"/g,'&quot;')}"> · ${skipped} skipped</span>`;
+  return `<span class="track-stat">${txt}</span>`;
+}
+
 let serverLog=[], serverLogAt=null;
 async function loadServerLog(){
   try{
@@ -4015,6 +4043,7 @@ function renderTrackBar(){
     if(s.spN) html+=`<span class="track-stat">Spread bets (≥4% EV): <b>${s.spHit}/${s.spN}</b> · ROI <b class="${s.spROI>=0?'track-good':'track-bad'}">${s.spROI>=0?'+':''}${(s.spROI/s.spN*100).toFixed(0)}%</b></span>`;
     if(s.vN) html+=`<span class="track-stat">vs Kalshi (≥5¢): <b>${s.vHit}/${s.vN}</b>${pct(s.vHit,s.vN)}</span>`;
   }
+  html+=betsHtml();
   if(pending) html+=`<span class="track-stat" style="color:var(--dim2)">${pending} pending</span>`;
   html+=serverLogAt
     ? `<span class="track-stat" style="color:var(--dim2)" title="Logged and graded by a scheduled job, independent of this browser">🌐 ${serverLog.length} server-logged</span>`
@@ -4307,7 +4336,7 @@ async function load(){
   status.textContent='Building ratings, checking injuries & markets…';
   try{ await loadTeamStats(); }catch(e){}
   const teamsPlaying=new Set(games.flatMap(g=>[g.homeAbbr,g.awayAbbr]));
-  const [,,kalshi]=await Promise.all([loadB2B(),resolveLog(),fetchKalshi(),loadInjuries(teamsPlaying),loadServerLog()]);
+  const [,,kalshi]=await Promise.all([loadB2B(),resolveLog(),fetchKalshi(),loadInjuries(teamsPlaying),loadServerLog(),loadBets()]);
   status.style.display='none';
   document.getElementById('wnba-games-hdr').style.display='flex';
   document.getElementById('wnba-badge-count').textContent=`${games.length} game${games.length!==1?'s':''}`;

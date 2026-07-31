@@ -298,6 +298,62 @@ def kalshi_probs(ms, home, away, three_way):
     return None if tot <= 0 else round(h / tot, 4)
 
 
+BETS = os.path.join(ROOT, "data", "wnba_bets.json")
+
+
+def payout(odds):
+    """Profit per 1 unit staked, from American odds."""
+    return odds / 100.0 if odds > 0 else 100.0 / abs(odds)
+
+
+def grade_bets(finals_by_id):
+    """Grade the bets actually taken. Separate from the model's flags: the
+    flags are what the model *suggested*, this ledger is what was really
+    backed, and only the ledger answers whether it made money."""
+    if not os.path.exists(BETS):
+        return
+    try:
+        store = json.load(open(BETS))
+    except Exception:
+        return
+    changed = False
+    for b in store.get("bets", []):
+        if b.get("result"):
+            continue
+        g = finals_by_id.get(str(b["gameId"]))
+        if not g:
+            continue
+        hs, as_ = g["homeScore"], g["awayScore"]
+        is_home = b["side"] == g["home"]
+        margin = (hs - as_) if is_home else (as_ - hs)
+        if b["type"] == "ML":
+            outcome = "win" if margin > 0 else "loss"
+        else:                                    # SPREAD
+            adj = margin + float(b["line"])
+            outcome = "push" if abs(adj) < 1e-9 else ("win" if adj > 0 else "loss")
+        profit = 0.0 if outcome == "push" else (
+            b["stakeUnits"] * payout(float(b["odds"])) if outcome == "win" else -b["stakeUnits"])
+        b["result"] = {"outcome": outcome, "profitUnits": round(profit, 4),
+                       "finalAway": as_, "finalHome": hs,
+                       "graded_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+        changed = True
+        print(f"  bet {b['matchup']} {b['type']} {b['side']} -> {outcome.upper()} ({profit:+.2f}u)")
+    if changed:
+        settled = [b for b in store["bets"] if b.get("result")]
+        won = sum(1 for b in settled if b["result"]["outcome"] == "win")
+        lost = sum(1 for b in settled if b["result"]["outcome"] == "loss")
+        pushed = sum(1 for b in settled if b["result"]["outcome"] == "push")
+        pnl = sum(b["result"]["profitUnits"] for b in settled)
+        staked = sum(b["stakeUnits"] for b in settled if b["result"]["outcome"] != "push")
+        store["summary"] = {"won": won, "lost": lost, "pushed": pushed,
+                            "profitUnits": round(pnl, 4), "stakedUnits": round(staked, 4),
+                            "roi": round(pnl / staked, 4) if staked else None}
+        store["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        json.dump(store, open(BETS, "w"), indent=1)
+        print(f"  bet ledger: {won}-{lost}" + (f"-{pushed}push" if pushed else "") +
+              f"  {pnl:+.2f}u  ROI {store['summary']['roi']:+.1%}" if staked else "")
+
+
 def main():
     store = {"updated_at": None, "entries": []}
     if os.path.exists(OUT):
@@ -380,6 +436,7 @@ def main():
             }
             ok = (e["model"]["game"] >= 0.5) == bool(e["result"]["homeWon"])
             print(f"  graded {e['away']}@{e['home']}  {g['awayScore']}-{g['homeScore']}  pick {'HIT' if ok else 'MISS'}")
+        grade_bets({str(k): v for k, v in seen.items()})
 
     entries.sort(key=lambda e: (e["date"], e["id"]))
     store["entries"] = entries[-800:]

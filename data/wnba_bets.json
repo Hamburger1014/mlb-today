@@ -1,0 +1,81 @@
+{
+ "note": "Bets actually taken, as distinct from everything the model flagged. Model flags live in wnba_predictions.json; only this ledger answers whether the picks made money. Prices are the ones showing when the bet was recorded. Staked flat at 1 unit each; the model's suggested quarter-Kelly size is kept alongside so Kelly-weighted returns can be computed later.",
+ "updated_at": "2026-07-31T15:55:00+00:00",
+ "bets": [
+  {
+   "id": "20260731-SEAATL-SPREAD",
+   "gameId": "401857102",
+   "date": "2026-07-31",
+   "matchup": "SEA@ATL",
+   "type": "SPREAD",
+   "side": "SEA",
+   "line": 12.5,
+   "odds": -110,
+   "modelP": 0.6234,
+   "ev": 0.186,
+   "suggestedKelly": 0.05,
+   "stakeUnits": 1.0,
+   "placed_at": "2026-07-31T15:55:00+00:00",
+   "result": null
+  },
+  {
+   "id": "20260731-INDPOR-SPREAD",
+   "gameId": "401857104",
+   "date": "2026-07-31",
+   "matchup": "IND@POR",
+   "type": "SPREAD",
+   "side": "IND",
+   "line": -7.5,
+   "odds": -115,
+   "modelP": 0.5701,
+   "ev": 0.07,
+   "suggestedKelly": 0.02,
+   "stakeUnits": 1.0,
+   "placed_at": "2026-07-31T15:55:00+00:00",
+   "result": null
+  },
+  {
+   "id": "20260731-INDPOR-ML",
+   "gameId": "401857104",
+   "date": "2026-07-31",
+   "matchup": "IND@POR",
+   "type": "ML",
+   "side": "IND",
+   "line": 0,
+   "odds": -323,
+   "modelP": 0.8064,
+   "ev": 0.056,
+   "suggestedKelly": 0.045,
+   "stakeUnits": 1.0,
+   "placed_at": "2026-07-31T15:55:00+00:00",
+   "result": null
+  },
+  {
+   "id": "20260731-DALWSH-SPREAD",
+   "gameId": "401857103",
+   "date": "2026-07-31",
+   "matchup": "DAL@WSH",
+   "type": "SPREAD",
+   "side": "WSH",
+   "line": 3.5,
+   "odds": -110,
+   "modelP": 0.5528,
+   "ev": 0.053,
+   "suggestedKelly": 0.015,
+   "stakeUnits": 1.0,
+   "placed_at": "2026-07-31T15:55:00+00:00",
+   "result": null
+  }
+ ],
+ "skipped": [
+  {
+   "matchup": "SEA@ATL",
+   "type": "ML",
+   "side": "SEA",
+   "odds": 533,
+   "modelP": 0.2196,
+   "ev": 0.39,
+   "reason": "Long-odds flag deliberately skipped. EV is proportional to payout, so on a 6-to-1 dog the model sitting ~6pp above the market reads as +39% EV. The model calibrates to ~3pp mid-distribution and was never validated on heavy underdogs, and both Vegas (~16%) and Kalshi (~13.5%) disagreed with its 22%."
+  }
+ ]
+}
