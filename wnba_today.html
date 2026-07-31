@@ -1064,14 +1064,31 @@ function bestSpreadBet(model,g){
   return opts[0];
 }
 
+// Minimum probability-space edge, measured rather than guessed.
+// Walk-forward calibration by predicted-probability bucket (1,246 games) shows
+// errors of 1.0–5.9pp with NO systematic degradation in the tails — the worst
+// bucket is near 50/50, the 85%+ bucket is the most accurate. So the longshot
+// problem was never worse calibration; it's that an EV threshold demands LESS
+// probability accuracy as the payout grows: EV = edge x (1+b), so a 3% EV bar
+// needs only 0.5pp of edge at +533 but 1.6pp at -110 — exactly backwards.
+// Requiring a floor on the EDGE itself is price-independent and fixes that.
+const MIN_PROB_EDGE = 0.04;
 function bestVegasBet(model,g){
   if(!model||!g.inlineOdds||g.inlineOdds.homeML==null) return null;
+  // De-vigged market probability is the fair comparison for "does the model
+  // disagree with the market", while the raw price is what EV must be paid at.
+  const rawH=mlToRawProb(g.inlineOdds.homeML), rawA=mlToRawProb(g.inlineOdds.awayML);
+  const tot=(rawH!=null&&rawA!=null)?(rawH+rawA):null;
   const sides=[
-    {side:g.homeAbbr, p:model.pHomeGame,   ml:g.inlineOdds.homeML},
-    {side:g.awayAbbr, p:1-model.pHomeGame, ml:g.inlineOdds.awayML},
-  ].map(s=>({...s, ev:vegasEV(s.p,s.ml)}));
+    {side:g.homeAbbr, p:model.pHomeGame,   ml:g.inlineOdds.homeML, mkt:tot?rawH/tot:null},
+    {side:g.awayAbbr, p:1-model.pHomeGame, ml:g.inlineOdds.awayML, mkt:tot?rawA/tot:null},
+  ].map(s=>({...s, ev:vegasEV(s.p,s.ml), edge:(s.mkt!=null?s.p-s.mkt:null)}));
   sides.sort((x,y)=>y.ev-x.ev);
-  return sides[0];
+  const best=sides[0];
+  // Thin edges dressed up by a big payout are the failure mode; require the
+  // model to actually disagree with the market by more than calibration noise.
+  if(best.edge!=null && best.edge<MIN_PROB_EDGE) return {...best, belowEdgeFloor:true};
+  return best;
 }
 function fmtML(ml){ return ml==null?'—':(ml>0?'+'+ml:String(ml)); }
 
@@ -1259,6 +1276,8 @@ function renderGame(g, model, kGame, kQtrs){
     }else{
       edgeBadge='<span class="edge-badge edge-neu">Live model running · no live market price to compare</span>';
     }
+  }else if(vBet&&vBet.belowEdgeFloor){
+    edgeBadge=`<span class="edge-badge edge-neu">${vBet.side} +${(vBet.ev*100).toFixed(1)}% EV but only ${(vBet.edge*100).toFixed(1)}pp edge vs market — below noise</span>`;
   }else if(vBet){
     const evPct=(vBet.ev*100).toFixed(1);
     edgeBadge=vBet.ev>=0.05?`<span class="edge-badge edge-pos">VALUE vs Vegas: ${vBet.side} ${fmtML(vBet.ml)} → +${evPct}% EV</span>`
@@ -1419,7 +1438,7 @@ async function init(){
     if(!g.isFinal&&!g.isLive){
       const mu=`${g.awayAbbr}@${g.homeAbbr}`;
       const vBet=bestVegasBet(model,g);
-      if(vBet&&vBet.ev>=0.03)
+      if(vBet&&!vBet.belowEdgeFloor&&vBet.ev>=0.03)
         plays.push({type:'ML', matchup:mu, side:vBet.side, ml:vBet.ml, ev:vBet.ev, p:vBet.p,
           label:`${vBet.side} ML ${fmtML(vBet.ml)}`, kelly:Math.min(0.05,vBet.ev/mlPayout(vBet.ml)/4)});
       // Spreads use a higher bar (4%): the margin distribution calibrates to

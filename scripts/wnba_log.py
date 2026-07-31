@@ -412,6 +412,28 @@ def main():
             entries.append(e); by_id[e["id"]] = e
             print(f"  logged {g['away']}@{g['home']}  P(home)={m['game']}  mu={m['mu']}")
 
+    # ── CLOSING LINE ──
+    # Every run overwrites `closing` for games that are still pregame, so the
+    # last value written before tip IS the closing line. Closing-line value is
+    # the fastest honest read on whether the model has edge: realized ROI needs
+    # most of a season to separate a 3% edge from noise, CLV needs weeks,
+    # because it measures whether the market moved toward us rather than
+    # whether the ball bounced our way.
+    still_pregame = [g for g in today if not g["isFinal"] and not g["isLive"]]
+    if still_pregame:
+        kg2, kq2 = kalshi_snapshot()
+        for g in still_pregame:
+            e = by_id.get(g["id"])
+            if not e:
+                continue
+            key = "|".join(sorted([g["home"], g["away"]]))
+            e["closing"] = {
+                "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "vegas": g["vegas"], "spread": g["spread"],
+                "kalshi": kalshi_probs(kg2.get(key), g["home"], g["away"], False),
+            }
+        print(f"  closing-line refreshed for {len(still_pregame)} pregame games")
+
     # ── GRADE ──
     pending = [e for e in entries if not e.get("result")]
     if pending:
@@ -437,6 +459,34 @@ def main():
             ok = (e["model"]["game"] >= 0.5) == bool(e["result"]["homeWon"])
             print(f"  graded {e['away']}@{e['home']}  {g['awayScore']}-{g['homeScore']}  pick {'HIT' if ok else 'MISS'}")
         grade_bets({str(k): v for k, v in seen.items()})
+
+    # ── CLV SUMMARY ──
+    # For each entry where the model had a side, compare the implied
+    # probability of that side at log time vs at close. Positive means the
+    # market moved toward us — the signal that survives even when results don't.
+    clv = []
+    for e in entries:
+        c = e.get("closing")
+        if not c or not e.get("vegas") or not c.get("vegas"):
+            continue
+        p_model = e["model"]["game"]
+        side_home = p_model >= 0.5
+        def implied(v):
+            h, a = ml_to_raw(v.get("homeML")), ml_to_raw(v.get("awayML"))
+            if h is None or a is None or (h + a) <= 0:
+                return None
+            return (h / (h + a)) if side_home else (a / (h + a))
+        p0, p1 = implied(e["vegas"]), implied(c["vegas"])
+        if p0 is None or p1 is None:
+            continue
+        clv.append({"id": e["id"], "delta": p1 - p0})
+    if clv:
+        avg = sum(x["delta"] for x in clv) / len(clv)
+        beat = sum(1 for x in clv if x["delta"] > 0)
+        store["clv"] = {"n": len(clv), "avgCents": round(avg * 100, 2),
+                        "beatRate": round(beat / len(clv), 4)}
+        print(f"  CLV: {len(clv)} games, avg {avg*100:+.2f}c, "
+              f"market moved our way {beat}/{len(clv)} ({beat/len(clv):.0%})")
 
     entries.sort(key=lambda e: (e["date"], e["id"]))
     store["entries"] = entries[-800:]

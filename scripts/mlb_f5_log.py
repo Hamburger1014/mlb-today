@@ -298,6 +298,29 @@ def main():
             print(f"  logged {g['awayAbbr']}@{g['homeAbbr']}  "
                   f"h={m['h']:.3f} t={m['t']:.3f} a={m['a']:.3f}{flag}")
 
+    # ── CLOSING LINE ──
+    # Overwritten every run while a game is still pregame, so the final value
+    # is the closing ask. CLV converges far faster than realized ROI: it asks
+    # whether the market moved toward our side, not whether the ball bounced
+    # our way, so a few weeks of it beats a season of P&L for detecting edge.
+    still_pre = [g for g in games if not g["isFinal"] and not g["isLive"]]
+    if still_pre:
+        kmap2 = kalshi_f5()
+        n = 0
+        for g in still_pre:
+            e = by_id.get(str(g["gamePk"]))
+            if not e:
+                continue
+            km = kmap2.get("|".join(sorted([g["homeAbbr"], g["awayAbbr"]])))
+            if not km:
+                continue
+            e["closing"] = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                            "askH": km["sides"].get(g["homeAbbr"]),
+                            "askA": km["sides"].get(g["awayAbbr"]),
+                            "askT": km["sides"].get("TIE")}
+            n += 1
+        print(f"  closing-line refreshed for {n} pregame games")
+
     # ── GRADE ──
     pending = [e for e in entries if not e.get("result")]
     if pending:
@@ -348,6 +371,27 @@ def main():
                      {"home": "h", "tie": "t", "away": "a"}[e["result"]["outcome"]][0])
         store["accuracy"] = {"n": len(graded), "hit": hit, "rate": round(hit / len(graded), 4)}
         print(f"  3-way call accuracy: {hit}/{len(graded)} = {hit/len(graded):.1%}")
+
+    # ── CLV on flagged plays ──
+    # Buying a contract, we want the ask to RISE after we're in: the market
+    # coming toward our side. Measured only on plays, since that's where the
+    # model actually committed to a view.
+    clv = []
+    for e in entries:
+        p, c = e.get("play"), e.get("closing")
+        if not p or not c:
+            continue
+        close_ask = {"home": c.get("askH"), "away": c.get("askA"), "tie": c.get("askT")}.get(p["key"])
+        if close_ask is None:
+            continue
+        clv.append(close_ask - p["price"])
+    if clv:
+        avg = sum(clv) / len(clv)
+        beat = sum(1 for d in clv if d > 0)
+        store["clv"] = {"n": len(clv), "avgCents": round(avg * 100, 2),
+                        "beatRate": round(beat / len(clv), 4)}
+        print(f"  CLV on plays: {len(clv)}, avg {avg*100:+.2f}c, "
+              f"market came to us {beat}/{len(clv)} ({beat/len(clv):.0%})")
 
     entries.sort(key=lambda e: (e["date"], e["gamePk"]))
     store["entries"] = entries[-1500:]
