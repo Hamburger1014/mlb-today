@@ -3219,6 +3219,7 @@ async function init(){
     cap(fetchWeather(mlbGames), 10000, undefined),
     cap(fetchBullpen(), 10000, undefined),
     cap(fetchKalshiF5(), 12000, []),
+    cap(loadF5ServerLog(), 8000, undefined),
   ]);
   stepDone('s4');
 
@@ -3405,12 +3406,35 @@ function wireGameControls(container, ctrls){
   apply();   // initial: hides Final (its toggle starts inactive)
 }
 
+// Server-side F5 log (data/mlb_f5_predictions.json), written and graded by the
+// scheduled Action. The on-page "Realized" line above it comes from THIS
+// browser's localStorage and also blends bets made before the July-31 Poisson
+// fix; this line is browser-independent and post-fix only.
+let f5ServerLog=null;
+async function loadF5ServerLog(){
+  try{
+    const r=await fetch('data/mlb_f5_predictions.json?cb='+Date.now());
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    f5ServerLog=await r.json();
+  }catch(e){ f5ServerLog=null; }
+}
+function f5ServerHtml(){
+  if(!f5ServerLog) return '';
+  const s=f5ServerLog.summary, acc=f5ServerLog.accuracy;
+  const n=(f5ServerLog.entries||[]).length;
+  const parts=[];
+  if(s&&s.n) parts.push(`flagged plays <b>${s.w}–${s.l}</b> · <b class="${s.profit>=0?'':'bb-warn'}">${s.profit>=0?'+':''}${s.profit.toFixed(2)}u</b> on ${s.risked.toFixed(2)} risked · ROI <b>${s.roi>=0?'+':''}${(s.roi*100).toFixed(0)}%</b>`);
+  if(acc&&acc.n) parts.push(`3-way calls ${acc.hit}/${acc.n} (${(acc.rate*100).toFixed(0)}%)`);
+  const body=parts.length?parts.join(' · '):'no graded games yet';
+  return `<div class="bb-foot">&#x1F310; Server log (post-fix, browser-independent): ${n} games logged · ${body}</div>`;
+}
+
 // Build the "Today's Best Bets" strip from BEST_BETS, insert after the header.
 function renderBestBets(container, hdr){
   const valuePlays = BEST_BETS.filter(b=>!b.totals).sort((a,b)=>b.roi-a.roi);
   const card=document.createElement('div');
   card.className='best-bets';
-  const roi=betsROIHtml('MLBF5');
+  const roi=betsROIHtml('MLBF5')+f5ServerHtml();
   if(!valuePlays.length){
     card.innerHTML=`<div class="bb-title">&#x1F3AF; Today's Best Bets <span style="font-weight:400;opacity:.6;font-size:.62rem">First 5 Innings</span></div>
       <div class="bb-empty">No F5 edges vs Kalshi today — the model agrees with the KXMLBF5 market. Sit tight.</div>${roi}`;

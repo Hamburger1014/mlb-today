@@ -15,6 +15,8 @@ on:
       - 'scripts/fetch_kalshi_mlb.py'
       - 'scripts/wnba_log.py'
       - 'scripts/verify_wnba_parity.py'
+      - 'scripts/mlb_f5_log.py'
+      - 'scripts/verify_f5_parity.py'
       - '.github/workflows/kalshi-snapshot.yml'
 
 permissions:
@@ -38,8 +40,12 @@ jobs:
       # shows — so fail loudly rather than record predictions nobody made.
       - name: Verify WNBA model parity (page vs logger)
         run: python scripts/verify_wnba_parity.py
+      - name: Verify MLB F5 model parity (page vs logger)
+        run: python scripts/verify_f5_parity.py
       - name: Log & grade WNBA predictions
         run: python scripts/wnba_log.py
+      - name: Log & grade MLB F5 predictions
+        run: python scripts/mlb_f5_log.py
       # These files are regenerated every run, so a rebase against a concurrent
       # human commit can conflict on them (it did). Instead: re-base onto the
       # current remote with a mixed reset, which keeps the freshly generated
@@ -52,7 +58,9 @@ jobs:
           for attempt in 1 2 3; do
             git fetch -q origin main
             git reset -q origin/main
-            git add data/kalshi_wnba.json data/kalshi_mlb.json data/wnba_predictions.json
+            git add data/kalshi_wnba.json data/kalshi_mlb.json \
+                    data/wnba_predictions.json data/wnba_bets.json \
+                    data/mlb_f5_predictions.json
             if git diff --cached --quiet; then
               echo "no changes"; exit 0
             fi
