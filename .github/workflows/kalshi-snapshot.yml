@@ -37,15 +37,27 @@ jobs:
         run: python scripts/verify_wnba_parity.py
       - name: Log & grade WNBA predictions
         run: python scripts/wnba_log.py
+      # These files are regenerated every run, so a rebase against a concurrent
+      # human commit can conflict on them (it did). Instead: re-base onto the
+      # current remote with a mixed reset, which keeps the freshly generated
+      # files in the working tree and drops any stale index state, then commit
+      # them on top. Retry to survive a push race.
       - name: Commit snapshot if changed
         run: |
           git config user.name "kalshi-snapshot-bot"
           git config user.email "actions@github.com"
-          git add data/kalshi_wnba.json data/kalshi_mlb.json data/wnba_predictions.json
-          if git diff --cached --quiet; then
-            echo "no changes"
-          else
-            git commit -m "Kalshi snapshot + WNBA prediction log"
-            git pull --rebase origin main
-            git push
-          fi
+          for attempt in 1 2 3; do
+            git fetch -q origin main
+            git reset -q origin/main
+            git add data/kalshi_wnba.json data/kalshi_mlb.json data/wnba_predictions.json
+            if git diff --cached --quiet; then
+              echo "no changes"; exit 0
+            fi
+            git commit -q -m "Kalshi snapshot + WNBA prediction log"
+            if git push -q origin HEAD:main; then
+              echo "pushed on attempt $attempt"; exit 0
+            fi
+            echo "push race on attempt $attempt, retrying"
+            sleep 5
+          done
+          echo "push failed after 3 attempts"; exit 1
