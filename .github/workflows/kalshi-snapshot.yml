@@ -2,9 +2,12 @@ name: Kalshi snapshot
 
 on:
   schedule:
-    # every 30 min, 14:00-03:30 UTC (roughly 10am-11:30pm ET, MLB/WNBA hours)
+    # every 30 min, 14:00-05:30 UTC (roughly 10am ET through 12:30am ET).
+    # Runs past 03:30 so late West-Coast tips (a 9pm CT Portland game ends
+    # around 04:15 UTC) get graded the same night instead of waiting for
+    # the next morning's run.
     - cron: '*/30 14-23 * * *'
-    - cron: '*/30 0-3 * * *'
+    - cron: '*/30 0-5 * * *'
   workflow_dispatch:
   push:
     paths:
