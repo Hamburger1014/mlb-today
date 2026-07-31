@@ -263,6 +263,7 @@
     .bb-type-ml{background:rgba(58,138,232,.18);color:#60a5fa;border:1px solid rgba(58,138,232,.3)}
     .bb-type-sp{background:rgba(20,184,166,.18);color:#2dd4bf;border:1px solid rgba(20,184,166,.3)}
     .bb-ok{color:var(--green);font-size:.7rem}
+    .bb-warn{color:#fbbf24;font-size:.7rem;font-weight:700}
     .bb-stake{color:var(--dim);font-size:.74rem;margin-left:auto}
     .bb-foot{font-size:.66rem;color:var(--dim2);margin-top:8px;line-height:1.4}
 
@@ -1432,10 +1433,16 @@ function renderBestBets(plays){
   for(const b of plays){
     const tag=b.type==='SPREAD'
       ?'<span class="bb-type bb-type-sp">SPREAD</span>':'<span class="bb-type bb-type-ml">ML</span>';
+    // Long-odds caution: EV scales with payout, so at +250 or longer a few
+    // points of probability error becomes a huge apparent edge. The model is
+    // calibrated to ~3pp in the middle of the distribution and was never
+    // validated on heavy underdogs — treat these as unproven, not as free money.
+    const longshot=b.ml>=250
+      ?'<span class="bb-warn" title="EV is payout-amplified at long odds and the model is unvalidated on heavy underdogs — unproven, size down">⚠ long odds</span>':'';
     const push=b.pPush>0.005?` <span class="qt-sub" style="display:inline">push ${fmtPct(b.pPush)}</span>`:'';
-    rows+=`<div class="bb-row"><span class="bb-mu">${b.matchup}</span>${tag}<span class="bb-pick">${b.label}</span><span class="bb-edge">+${(b.ev*100).toFixed(1)}% EV</span><span class="bb-ok">model ${fmtPct(b.p)}${push}</span><span class="bb-stake">${(b.kelly*100).toFixed(1)}% bankroll (¼-Kelly)</span></div>`;
+    rows+=`<div class="bb-row"><span class="bb-mu">${b.matchup}</span>${tag}<span class="bb-pick">${b.label}</span><span class="bb-edge">+${(b.ev*100).toFixed(1)}% EV</span>${longshot}<span class="bb-ok">model ${fmtPct(b.p)}${push}</span><span class="bb-stake">${(b.kelly*100).toFixed(1)}% bankroll (¼-Kelly)</span></div>`;
   }
-  return `<div class="best-bets"><div class="bb-title">🎯 WNBA Best Bets <span class="bb-count">${plays.length}</span> ${sub}</div>${rows}<div class="bb-foot">Play = model probability beats the price's implied probability after vig — ≥3% EV for moneylines, ≥4% for spreads (the margin distribution only calibrates to ~1 point, which is worth ~3% of probability, so spread edges carry more model risk). Whole-number spreads price the push explicitly. Stake = quarter-Kelly, capped at 5%. Treat flags as experimental until the realized line below proves out. Not financial advice.</div>${roi}</div>`;
+  return `<div class="best-bets"><div class="bb-title">🎯 WNBA Best Bets <span class="bb-count">${plays.length}</span> ${sub}</div>${rows}<div class="bb-foot">Play = model probability beats the price's implied probability after vig — ≥3% EV for moneylines, ≥4% for spreads (the margin distribution only calibrates to ~1 point, which is worth ~3% of probability, so spread edges carry more model risk). Whole-number spreads price the push explicitly. Stake = quarter-Kelly, capped at 5%. <b>⚠ long odds</b> means the payout amplifies EV — at +250 or longer, a few points of probability error looks like a huge edge, and the model was never validated on heavy underdogs; those flags are unproven, not free money. Treat all flags as experimental until the realized line below proves out. Not financial advice.</div>${roi}</div>`;
 }
 
 init();
