@@ -3878,11 +3878,21 @@ function kQtrProbs(ev,homeAbbr,awayAbbr){
 const LOG_KEY='wnba_pred_log_v2';
 let predLog=(()=>{try{return JSON.parse(localStorage.getItem(LOG_KEY)||'[]');}catch(e){return[];}})();
 function saveLog(){try{localStorage.setItem(LOG_KEY,JSON.stringify(predLog.slice(-400)));}catch(e){}}
+// US date of the game (shift UTC back 5h) — a 7pm CT tip is already tomorrow
+// in UTC, and ESPN's scoreboard is keyed by US date.
+function usGameDate(iso){
+  const t=iso?new Date(iso).getTime():Date.now();
+  return new Date(t-5*3600*1000).toISOString().slice(0,10);
+}
+function candidateDates(d){
+  const base=new Date(d+'T12:00:00Z').getTime();
+  return [-1,0,1].map(off=>new Date(base+off*864e5).toISOString().slice(0,10));
+}
 function logPrediction(g,model,kGame,kQtrs){
   if(!model||g.isFinal||g.isLive) return;
   if(predLog.some(e=>e.id===g.espnId)) return;
   predLog.push({
-    id:g.espnId,date:(g.gameDate||new Date().toISOString()).slice(0,10),
+    id:g.espnId,date:usGameDate(g.gameDate),
     home:g.homeAbbr,away:g.awayAbbr,
     model:{game:+model.pHomeGame.toFixed(4),
       scores:model.quarters.map(q=>[+q.a.toFixed(1),+q.h.toFixed(1)]),
@@ -3899,8 +3909,11 @@ function logPrediction(g,model,kGame,kQtrs){
   saveLog();
 }
 async function resolveLog(){
-  const today=new Date().toISOString().slice(0,10);
-  const dates=[...new Set(predLog.filter(e=>!e.result&&e.date<=today).map(e=>e.date))].slice(-10);
+  // Probe neighbouring dates: UTC-derived dates from older log entries can be
+  // a day ahead of ESPN's US-keyed scoreboard, which silently graded nothing.
+  const today=new Date(Date.now()+864e5).toISOString().slice(0,10);
+  const pend=predLog.filter(e=>!e.result&&e.date<=today).map(e=>e.date);
+  const dates=[...new Set(pend.flatMap(candidateDates))].slice(-14);
   for(const date of dates){
     try{
       for(const g of await fetchScoreboard(date.replace(/-/g,''))){

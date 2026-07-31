@@ -812,13 +812,19 @@ function kalshiQtrProbs(ev, homeAbbr, awayAbbr){
 const LOG_KEY='wnba_pred_log_v2';   // v2 = trained model (v1 entries were untrained prototype)
 let predLog=(()=>{try{return JSON.parse(localStorage.getItem(LOG_KEY)||'[]');}catch(e){return[];}})();
 function saveLog(){ try{localStorage.setItem(LOG_KEY,JSON.stringify(predLog.slice(-400)));}catch(e){} }
+// US date of the game (shift UTC back 5h) — a 7pm CT tip is already tomorrow
+// in UTC, and ESPN's scoreboard is keyed by US date.
+function usGameDate(iso){
+  const t=iso?new Date(iso).getTime():Date.now();
+  return new Date(t-5*3600*1000).toISOString().slice(0,10);
+}
 
 function logPrediction(g, model, kGame, kQtrs){
   if(!model || g.isFinal || g.isLive) return;              // only log true pregame predictions
   if(predLog.some(e=>e.id===g.espnId)) return;             // once per game
   predLog.push({
     id:g.espnId,
-    date:(g.gameDate||new Date().toISOString()).slice(0,10),
+    date:usGameDate(g.gameDate),
     home:g.homeAbbr, away:g.awayAbbr,
     model:{
       game:+model.pHomeGame.toFixed(4),
@@ -840,9 +846,17 @@ function logPrediction(g, model, kGame, kQtrs){
 }
 
 // grade pending predictions from final linescores
+// ESPN's scoreboard is keyed by US date, but a 7pm CT tip is already the next
+// day in UTC — so a UTC-derived date misses every night game and the log would
+// never grade anything. Probe the stored date and its neighbours.
+function candidateDates(d){
+  const base=new Date(d+'T12:00:00Z').getTime();
+  return [-1,0,1].map(off=>new Date(base+off*864e5).toISOString().slice(0,10));
+}
 async function resolveLog(){
-  const today=new Date().toISOString().slice(0,10);
-  const pendingDates=[...new Set(predLog.filter(e=>!e.result&&e.date<=today).map(e=>e.date))].slice(-10);
+  const today=new Date(Date.now()+864e5).toISOString().slice(0,10);
+  const pend=predLog.filter(e=>!e.result&&e.date<=today).map(e=>e.date);
+  const pendingDates=[...new Set(pend.flatMap(candidateDates))].slice(-14);
   for(const date of pendingDates){
     try{
       const games=await fetchScoreboard(date.replace(/-/g,''));
