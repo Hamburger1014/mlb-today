@@ -3564,15 +3564,25 @@ function fmtML(ml){ return ml==null?'—':(ml>0?'+'+ml:String(ml)); }
 // Live state -> re-predicted win prob & remaining quarters. Coefficients are
 // fitted at quarter boundaries; mid-quarter they're interpolated by elapsed
 // game time so the number moves smoothly instead of jumping at the buzzer.
+// ESPN uses "M:SS" during play but a bare decimal at breaks and under a
+// minute ("0.0" at halftime, "45.3" late in a quarter). Handle both — treating
+// "0.0" as unparseable made the model think a quarter less had elapsed.
 function parseClock(c){
-  if(!c) return null;
-  const m=String(c).match(/(\d+):(\d+)/);
-  return m?(+m[1]*60+ +m[2]):null;
+  if(c==null||c==='') return null;
+  const s=String(c).trim();
+  const m=s.match(/^(\d+):(\d+)/);
+  if(m) return +m[1]*60 + +m[2];
+  const d=parseFloat(s);
+  return isNaN(d)?null:d;
 }
 function liveElapsed(g){
   if(g.isFinal) return 4;
   const per=Math.min(g.period||0,4);
   if(per<=0) return 0;
+  // Explicit break states: the period on the clock is already complete.
+  const stn=(g.statusName||'').toUpperCase();
+  if(stn.includes('HALFTIME')) return 2;
+  if(stn.includes('END_PERIOD')||stn.includes('END_OF')) return per;
   const secs=parseClock(g.clock);
   const done=secs==null?0:Math.max(0,Math.min(1,(QTR_MINUTES*60-secs)/(QTR_MINUTES*60)));
   return Math.min(4,(per-1)+done);
@@ -3657,6 +3667,7 @@ function parseEvent(evt){
     isLive:st.includes('IN_PROGRESS')||st.includes('LIVE')||st.includes('HALFTIME')||st.includes('END_PERIOD'),
     isFinal:st.includes('FINAL'),
     statusTxt:(comp.status&&comp.status.type&&comp.status.type.shortDetail)||'',
+    statusName:st,
     period:(comp.status&&comp.status.period)||0,
     clock:(comp.status&&comp.status.displayClock)||'',
     inlineOdds,
