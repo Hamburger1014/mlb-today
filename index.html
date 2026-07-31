@@ -1274,10 +1274,36 @@ function projectScore(homeAbbr,awayAbbr,homeKBBq=null,awayKBBq=null,p=null){
 //   barely pitch), so it leans on K-BB% with NO bullpen term.
 //   Expected F5 runs per team = (offense R/G, shrunk) × 5/9 × oppSP factor × scale;
 //   home gets a small bump. Poisson runs each side → convolve for the 3 outcomes.
-const F5_MODEL = { beta:1.5, homeBump:1.06, scale:1.15 };
+//   RUN DISTRIBUTION — NEGATIVE BINOMIAL, not Poisson. Measured on 3,929 real
+//   F5 linescores (2025 + 2026): var/mean = 2.19 home / 2.25 away, so runs are
+//   ~2.2x overdispersed and Poisson is far too narrow. Poisson clusters the two
+//   scores together and OVERSTATED ties by +2.44pp (18.22% vs 15.78% actual),
+//   which fed straight into the "Tie F5" value plays — those were structurally
+//   -EV. NB(mean, disp) has var = mean*(1+mean/disp); disp=4.0 fits the observed
+//   3-way split to within 0.001 on all three outcomes.
+//   Honest out-of-sample check: fitting disp on 2025 alone and testing on 2026
+//   cut the tie error 82% (+0.0257 -> +0.0046) and improved log-loss
+//   (1.01905 -> 1.01644). Calibration script: wnba_model/calibrate_f5.py.
+const F5_MODEL = { beta:1.5, homeBump:1.06, scale:1.15, disp:4.0 };
 function _poisPmf(lam, kmax=14){
   lam=Math.max(0.05,lam); const out=new Array(kmax+1); let t=Math.exp(-lam); out[0]=t;
   for(let k=1;k<=kmax;k++){ t*=lam/k; out[k]=t; } return out;
+}
+// Negative binomial pmf by mean + dispersion r (var = mean*(1+mean/r)).
+// r -> infinity recovers Poisson.
+function _nbPmf(mean, r=F5_MODEL.disp, kmax=20){
+  mean=Math.max(0.05,mean);
+  const p=r/(r+mean), out=new Array(kmax+1);
+  let v=Math.pow(p,r); out[0]=v;
+  for(let k=1;k<=kmax;k++){ v*=((k+r-1)/k)*(1-p); out[k]=v; }
+  return out;
+}
+// Convolve two independent pmfs (needed for the F5 total: two NBs with
+// different means do NOT sum to a single NB, unlike the Poisson case).
+function _convolve(a, b){
+  const out=new Array(a.length+b.length-1).fill(0);
+  for(let i=0;i<a.length;i++) for(let j=0;j<b.length;j++) out[i+j]+=a[i]*b[j];
+  return out;
 }
 // Returns {h: P(home leads after 5), t: P(tie), a: P(away leads)} or null.
 // Stat-object form — takes team stat objects directly (used by the season replay,
@@ -1291,7 +1317,7 @@ function f5ProbsStats(h, a, homeKBBq, awayKBBq){
   const spf=q=> (q==null)?1:Math.max(0.55,Math.min(1.5, 1 - F5_MODEL.beta*(q-lk)));  // better SP → fewer runs
   const lamH=Math.max(0.15, hoff*(5/9)*spf(awayKBBq)*F5_MODEL.homeBump*F5_MODEL.scale);
   const lamA=Math.max(0.15, aoff*(5/9)*spf(homeKBBq)*F5_MODEL.scale);
-  const ph=_poisPmf(lamH), pa=_poisPmf(lamA);
+  const ph=_nbPmf(lamH), pa=_nbPmf(lamA);
   let H=0,T=0,A=0;
   for(let i=0;i<ph.length;i++) for(let j=0;j<pa.length;j++){ const p=ph[i]*pa[j]; if(i>j)H+=p; else if(i===j)T+=p; else A+=p; }
   const s=H+T+A||1; return {h:H/s, t:T/s, a:A/s};
@@ -1311,7 +1337,8 @@ function f5Totals(homeAbbr, awayAbbr, homeKBBq, awayKBBq){
   const spf=q=> (q==null)?1:Math.max(0.55,Math.min(1.5, 1 - F5_MODEL.beta*(q-lk)));
   const lamH=Math.max(0.15, hoff*(5/9)*spf(awayKBBq)*F5_MODEL.homeBump*F5_MODEL.scale);
   const lamA=Math.max(0.15, aoff*(5/9)*spf(homeKBBq)*F5_MODEL.scale);
-  const pmf=_poisPmf(lamH+lamA, 20);
+  // Two NBs with different means don't sum to a single NB, so convolve.
+  const pmf=_convolve(_nbPmf(lamH), _nbPmf(lamA));
   const pOver=line=>{ let p=0; for(let k=Math.ceil(line);k<pmf.length;k++) p+=pmf[k]; return p; };
   return { total:lamH+lamA, over35:pOver(3.5), over45:pOver(4.5), over55:pOver(5.5) };
 }
