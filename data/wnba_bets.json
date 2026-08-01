@@ -1,6 +1,6 @@
 {
  "note": "Bets actually taken, as distinct from everything the model flagged. Model flags live in wnba_predictions.json; only this ledger answers whether the picks made money. Prices are the ones showing when the bet was recorded. Staked flat at 1 unit each; the model's suggested quarter-Kelly size is kept alongside so Kelly-weighted returns can be computed later.",
- "updated_at": "2026-07-31T15:55:00+00:00",
+ "updated_at": "2026-08-01T05:16:27+00:00",
  "bets": [
   {
    "id": "20260731-SEAATL-SPREAD",
@@ -16,7 +16,13 @@
    "suggestedKelly": 0.05,
    "stakeUnits": 1.0,
    "placed_at": "2026-07-31T15:55:00+00:00",
-   "result": null
+   "result": {
+    "outcome": "win",
+    "profitUnits": 0.9091,
+    "finalAway": 89,
+    "finalHome": 98,
+    "graded_at": "2026-08-01T05:16:27+00:00"
+   }
   },
   {
    "id": "20260731-INDPOR-SPREAD",
@@ -32,7 +38,13 @@
    "suggestedKelly": 0.02,
    "stakeUnits": 1.0,
    "placed_at": "2026-07-31T15:55:00+00:00",
-   "result": null
+   "result": {
+    "outcome": "win",
+    "profitUnits": 0.8696,
+    "finalAway": 112,
+    "finalHome": 98,
+    "graded_at": "2026-08-01T05:16:27+00:00"
+   }
   },
   {
    "id": "20260731-INDPOR-ML",
@@ -48,7 +60,13 @@
    "suggestedKelly": 0.045,
    "stakeUnits": 1.0,
    "placed_at": "2026-07-31T15:55:00+00:00",
-   "result": null
+   "result": {
+    "outcome": "win",
+    "profitUnits": 0.3096,
+    "finalAway": 112,
+    "finalHome": 98,
+    "graded_at": "2026-08-01T05:16:27+00:00"
+   }
   },
   {
    "id": "20260731-DALWSH-SPREAD",
@@ -64,7 +82,13 @@
    "suggestedKelly": 0.015,
    "stakeUnits": 1.0,
    "placed_at": "2026-07-31T15:55:00+00:00",
-   "result": null
+   "result": {
+    "outcome": "win",
+    "profitUnits": 0.9091,
+    "finalAway": 75,
+    "finalHome": 81,
+    "graded_at": "2026-08-01T05:16:27+00:00"
+   }
   }
  ],
  "skipped": [
@@ -77,5 +101,13 @@
    "ev": 0.39,
    "reason": "Long-odds flag deliberately skipped. EV is proportional to payout, so on a 6-to-1 dog the model sitting ~6pp above the market reads as +39% EV. The model calibrates to ~3pp mid-distribution and was never validated on heavy underdogs, and both Vegas (~16%) and Kalshi (~13.5%) disagreed with its 22%."
   }
- ]
+ ],
+ "summary": {
+  "won": 4,
+  "lost": 0,
+  "pushed": 0,
+  "profitUnits": 2.9974,
+  "stakedUnits": 4.0,
+  "roi": 0.7493
+ }
 }
