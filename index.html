@@ -108,6 +108,11 @@
       background:var(--card2);border:1px solid var(--border);
       border-radius:12px;padding:2px 10px;font-size:.7rem;
     }
+    /* Price freshness. Severity is tied to MIN_NET_EV (1.5c): once the snapshot
+       is old enough that measured drift rivals the edge threshold, say so loudly. */
+    .sc-badge-fresh{background:rgba(34,197,94,.12);border-color:rgba(34,197,94,.3);color:#86efac}
+    .sc-badge-aging{background:rgba(251,191,36,.12);border-color:rgba(251,191,36,.35);color:#fbbf24}
+    .sc-badge-stale{background:rgba(232,23,77,.12);border-color:rgba(232,23,77,.35);color:#f87171;font-weight:700}
 
     /* ── Sort / filter controls ── */
     .game-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:2px 2px 4px;}
@@ -1787,6 +1792,44 @@ async function showKalshiDebug(){
 //  KALSHI FETCHING
 // ═══════════════════════════════════════════════════════════════
 // Public Kalshi fetch — no auth headers (market data endpoints are fully public)
+// ── Price provenance ──────────────────────────────────────────────────────────
+// Which route actually served the Kalshi prices on this load, and how old they
+// are. The fallback chain is silent by design (worker -> direct -> snapshot), so
+// without this a 60-minute-old ask renders identically to a live one. That
+// matters because MIN_NET_EV is 1.5c and measured snapshot drift reaches 2c —
+// staleness is the same order as the entire edge the page bets on.
+// `stale` wins over `live`: if ANY series fell back, the board is mixed and the
+// oldest timestamp is the honest one to show.
+const KALSHI_SRC = { mode:null, fetchedAt:null };
+function _kSrcLive(){ if(KALSHI_SRC.mode!=='snapshot') KALSHI_SRC.mode='live'; }
+function _kSrcSnapshot(fetchedAt){
+  KALSHI_SRC.mode='snapshot';
+  const t = Date.parse(fetchedAt);
+  if(!isNaN(t) && (KALSHI_SRC.fetchedAt==null || t < KALSHI_SRC.fetchedAt)) KALSHI_SRC.fetchedAt = t;
+}
+// Age of the prices in whole minutes, or null when they came live off Kalshi.
+function kalshiAgeMin(){
+  if(KALSHI_SRC.mode!=='snapshot' || KALSHI_SRC.fetchedAt==null) return null;
+  return Math.max(0, Math.round((Date.now()-KALSHI_SRC.fetchedAt)/60000));
+}
+// Freshness chip for the section header. Thresholds are anchored to the bet
+// threshold, not to taste: the snapshot job targets 30 min, so <=35 is working
+// as intended (amber), and past that drift starts rivalling MIN_NET_EV (red).
+function kalshiFreshnessBadge(){
+  // Only claim "live" when a live route actually reported one. An unknown
+  // provenance shows nothing rather than asserting freshness we can't back up.
+  if(KALSHI_SRC.mode==null) return '';
+  const age = kalshiAgeMin();
+  if(age==null)
+    return `<span class="sc-badge sc-badge-fresh" title="Prices came live from Kalshi on this load.">&#x1F7E2; live prices</span>`;
+  const cls = age<=35 ? 'sc-badge-aging' : 'sc-badge-stale';
+  const icon = age<=35 ? '&#x1F551;' : '&#x26A0;&#xFE0F;';
+  const tip = `Kalshi is rate-limiting the proxy, so prices come from the every-30-min snapshot instead of live. `
+            + `Snapshot taken ${new Date(KALSHI_SRC.fetchedAt).toLocaleTimeString()}. `
+            + `Typical drift over an hour is under 1 cent, but reaches ~2 cents — comparable to the 1.5 cent edge the model needs, so treat marginal flags with caution.`;
+  return `<span class="sc-badge ${cls}" title="${tip}">${icon} prices ${age}m old</span>`;
+}
+
 async function kalshiPublicFetch(path){
   const url = KALSHI_BASE + path;
   // Per-attempt timeout keeps the whole chain well under loadGames' 12s cap,
@@ -1800,7 +1843,7 @@ async function kalshiPublicFetch(path){
   // Fast routes: own Cloudflare Worker proxy, then direct (CORS-blocked from
   // GitHub Pages but fails fast, and works when served without an Origin).
   for(const u of [...(KALSHI_PROXY ? [KALSHI_PROXY + '?path=' + encodeURIComponent(path)] : []), url]){
-    try{ return await tryFetch(u); }catch(e){ lastErr = e; }
+    try{ const j = await tryFetch(u); _kSrcLive(); return j; }catch(e){ lastErr = e; }
   }
   // Same-origin snapshot committed by the scheduled GitHub Action
   // (data/kalshi_mlb.json, refreshed every 30 min during game hours) —
@@ -1830,6 +1873,7 @@ async function kalshiSnapshotFetch(path){
     const ts = /[?&]min_close_ts=(\d+)/.exec(path);
     if(ts) markets = markets.filter(m=>!m.close_time || Date.parse(m.close_time)/1000 >= +ts[1]);
     _kalshiDebug.results.push(`snapshot ${ser[1]}: ${markets.length} markets (as of ${snap.fetched_at})`);
+    _kSrcSnapshot(snap.fetched_at);
     return {markets, _snapshot:true, fetched_at:snap.fetched_at};
   }catch(e){ _kSnapPromise = null; return null; }
 }
@@ -2448,6 +2492,11 @@ function renderGame(game, extras){
       ${hasMarket?`
       <div class="kalshi-detail" style="margin-bottom:12px">
         <h4>&#x1F3AF; Model value vs Kalshi</h4>
+        <div class="kd-row"><span>Price source</span>${(()=>{const a=kalshiAgeMin();
+          if(KALSHI_SRC.mode==null) return `<span style="color:var(--dim)">unknown</span>`;
+          return a==null
+            ? `<span style="color:var(--green)">live from Kalshi</span>`
+            : `<span style="color:${a<=35?'#fbbf24':'#f87171'};font-weight:${a<=35?400:700}">snapshot · ${a} min old</span>`;})()}</div>
         <div class="kd-row"><span>Model (${homeAbbr} / ${awayAbbr})</span><span style="font-weight:700">${fmtPct(modelHomeP)} / ${fmtPct(1-modelHomeP)}</span></div>
         ${fairHomeSharp!=null?`<div class="kd-row"><span>Sharp books (${fairBooks}) — check</span><span style="color:var(--dim)">${fmtPct(fairHomeSharp)} / ${fmtPct(1-fairHomeSharp)}</span></div>`:''}
         ${bet?`
@@ -2973,6 +3022,7 @@ async function init(){
       ${withOdds>0?`<span class="sc-badge">&#x1F4B0; ${withOdds} Vegas lines</span>`:''}
       ${withPitch>0?`<span class="sc-badge">&#x26BE; ${withPitch} pitchers</span>`:''}
       ${withMarkets>0?`<span class="sc-badge">&#x26A1; ${withMarkets} Kalshi</span>`:''}
+      ${withMarkets>0?kalshiFreshnessBadge():''}
       ${!mlbStatsOk?`<span class="sc-badge" style="color:var(--orange)" title="Using ${statsSource} for team stats">&#x26A0; ${statsSource}</span>`:''}
     </div>`;
   container.appendChild(hdr);
@@ -3145,6 +3195,16 @@ function renderBestBets(container, hdr){
   card.className='best-bets bb-paper';
   const roi=betsROIHtml('MLBF5')+f5ServerHtml();
   const title=`<div class="bb-title">&#x1F9EA; F5 Model Signals <span class="bb-paper-tag">paper only</span></div>`;
+  // Staleness caveat: the "claimed" numbers below are computed against whatever
+  // ask we could get. If that ask is an old snapshot, say so right where the
+  // numbers are, not just in the header chip.
+  // Kept to one or two lines: the header chip's tooltip carries the long form,
+  // and this sits above the first game card on a phone.
+  const ageMin=kalshiAgeMin();
+  const staleNote = ageMin==null ? '' :
+    `<div class="bb-foot" style="color:${ageMin<=35?'#fbbf24':'#f87171'};margin-top:6px">`
+    + `${ageMin<=35?'&#x1F551;':'&#x26A0;&#xFE0F;'} Priced off a <b>${ageMin}-min-old</b> snapshot, not live Kalshi — `
+    + `drift can rival the 1.5&cent; edge these flags need.</div>`;
   if(!valuePlays.length){
     card.innerHTML=`${title}
       <div class="bb-empty">No F5 divergence from the KXMLBF5 market today.</div>${roi}`;
@@ -3157,7 +3217,7 @@ function renderBestBets(container, hdr){
     }
     card.innerHTML=`${title}
       ${rows}
-      <div class="bb-foot"><b>These are not recommendations.</b> Each row is where the F5 model disagrees with the Kalshi KXMLBF5 ask — tracked to measure whether the model has an edge, not to be bet. The live log below is the answer so far: over 38 graded flags the realized ROI was <b>negative</b>, and it got worse as the claimed edge got bigger — the signature of model error rather than market mispricing. Stake sizing was removed on purpose. Re-entry bar: flag rate under ~5% and a positive closing-line record over 100+ flags.</div>${roi}`;
+      <div class="bb-foot"><b>These are not recommendations.</b> Each row is where the F5 model disagrees with the Kalshi KXMLBF5 ask — tracked to measure whether the model has an edge, not to be bet. The live log below is the answer so far: over 38 graded flags the realized ROI was <b>negative</b>, and it got worse as the claimed edge got bigger — the signature of model error rather than market mispricing. Stake sizing was removed on purpose. Re-entry bar: flag rate under ~5% and a positive closing-line record over 100+ flags.</div>${staleNote}${roi}`;
   }
   hdr.insertAdjacentElement('afterend', card);
 }
@@ -3571,6 +3631,7 @@ async function kalshiLean(path){
       const r=await fetch(u,{headers:{'Accept':'application/json'},signal:ctl.signal});
       clearTimeout(t);
       if(!r.ok) throw new Error('Kalshi '+r.status);
+      _kSrcLive();
       return await r.json();
     }catch(e){ lastErr=e; }
   }
