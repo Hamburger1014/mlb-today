@@ -140,6 +140,14 @@
     .bb-type-sp{background:rgba(20,184,166,.18);color:#2dd4bf;border:1px solid rgba(20,184,166,.3)}
     .bb-stake{color:var(--dim);font-size:.74rem;margin-left:auto}
     .bb-ok{color:var(--green);font-size:.7rem}
+    /* Paper-only variant: the green "go bet this" styling is deliberately
+       stripped so an unproven signal never reads like a recommendation. */
+    .bb-paper{background:linear-gradient(180deg,#141826,#0b1320);border-color:rgba(148,163,184,.28)}
+    .bb-paper .bb-title{color:#cbd5e1}
+    .bb-paper-tag{font-size:.6rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;
+      background:rgba(148,163,184,.16);color:#94a3b8;border:1px solid rgba(148,163,184,.3);
+      border-radius:6px;padding:1px 7px}
+    .bb-edge-muted{color:var(--dim)!important;font-weight:600;margin-left:auto}
     .bb-warn{color:#fbbf24;font-size:.7rem}
     .bb-foot{font-size:.66rem;color:var(--dim2);margin-top:8px;line-height:1.4}
 
@@ -600,7 +608,7 @@
   </main>
 </div>
 
-<footer>MLB Today · MLB Stats API + ESPN · Kalshi Markets · Consensus blends model (20–25%) + Vegas (50%) + ESPN (30%) · Model: logistic regression trained on 7,300 real MLB games 2022–24 (56.6% walk-forward; 60–66% on confident picks) + Platt auto-calibration · Features: Pythagorean, win%, run-diff, starting-pitcher ERA, home edge · ROI engine: 9-book devigged fair value vs Kalshi price, fee-aware EV + ¼-Kelly stake</footer>
+<footer>MLB Today · MLB Stats API + ESPN · Kalshi Markets · Consensus blends model (20–25%) + Vegas (50%) + ESPN (30%) · Model: logistic regression trained on 7,300 real MLB games 2022–24 (56.6% walk-forward; 60–66% on confident picks) + Platt auto-calibration · Features: Pythagorean, win%, run-diff, starting-pitcher ERA, home edge · ROI engine: 9-book devigged fair value vs Kalshi price, fee-aware EV + ¼-Kelly stake · First-5-Innings model is paper-only (reference): its forward log returned a negative ROI that worsened as its claimed edge grew, so its signals are tracked, not bet</footer>
 
 <script>
 // ═══════════════════════════════════════════════════════════════
@@ -2134,13 +2142,20 @@ function renderGame(game, extras){
   const bet = _asks ? evaluateBet(modelHomeP, _asks, homeAbbr, awayAbbr) : null;
   const _isLive  = status==='Live' || status==='In Progress';
   const _isFinal = status==='Final';
-  // ── F5 VALUE badge (model F5 prob vs Kalshi KXMLBF5 ask). Best Bets now F5. ──
-  let betBadgeHtml = '';
-  if(f5bet && !_isFinal && !_isLive){
-    betBadgeHtml = `<span class="bet-badge">&#x1F3AF; F5 VALUE ${f5bet.pick} · model ${(f5bet.fair*100).toFixed(0)}% vs ${(f5bet.price*100).toFixed(0)}&cent; · stake ${(f5bet.stakeFrac*100).toFixed(1)}%</span>`;
-  } else if(_isLive && f5){
-    betBadgeHtml = `<span class="bet-badge bet-badge-live">&#x23F1;&#xFE0F; LIVE — F5 model is pregame, not a live edge</span>`;
+  // Log full-game flags to the same ledger F5 uses. These were being computed
+  // and shown (stake and all) but never recorded, so the full-game bet signal
+  // had no forward record at all — the exact blind spot that let F5 run at a
+  // negative ROI unnoticed. Now that full game is the headline model, it grades
+  // itself too. Pregame only; gradeBet fills the result from the real score.
+  if(bet && !_isLive && !_isFinal){
+    logBet('mlb:'+game.gamePk+':'+bet.team, {league:'MLB', date:new Date().toISOString().slice(0,10),
+      matchup:`${awayAbbr}@${homeAbbr}`, pick:bet.team, side:bet.team===homeAbbr?'home':'away', price:bet.price});
   }
+  // (Removed `betBadgeHtml` — a per-card "F5 VALUE … stake x%" badge that was
+  //  built here but never interpolated into any template, so it had silently
+  //  rendered nothing for as long as it existed. Not re-wired: F5 is paper-only
+  //  now, and a prominent per-card badge is the opposite of that. The signal
+  //  still shows in the F5 Model Signals panel and the server-side log.)
   // (full-game O/U leans + full-game model value stay informational in Details only.)
 
   // Pitchers from ESPN (re-use from early extraction)
@@ -2440,6 +2455,7 @@ function renderGame(game, extras){
         <div class="kd-row"><span>Model / Price / Fee</span><span>${fmtPct(bet.fair)} / ${(bet.price*100).toFixed(0)}&cent; / ${(bet.fee*100).toFixed(1)}&cent;</span></div>
         <div class="kd-row"><span>Edge / ROI</span><span style="color:var(--green);font-weight:700">+${(bet.netEV*100).toFixed(1)}&cent; · +${(bet.roi*100).toFixed(1)}%</span></div>
         <div class="kd-row"><span>Stake (¼ Kelly)</span><span>${(bet.stakeFrac*100).toFixed(1)}% bankroll · $${bet.stakeUSD.toFixed(0)}</span></div>
+        <div class="kd-row"><span>Full-game flags to date</span><span style="color:var(--dim)">${(()=>{const r=betsROI('MLB');return r.n?`${r.w}&ndash;${r.l} · ${r.roi>=0?'+':''}${(r.roi*100).toFixed(1)}% realized`:'no settled flags yet — now being logged';})()}</span></div>
         `:`<div class="kd-row"><span>Verdict</span><span style="color:var(--dim)">Model sees no edge vs Kalshi — pass</span></div>`}
       </div>`:''}
       ${hasPitchers&&(pitchers.away||pitchers.home)?`
@@ -2671,10 +2687,13 @@ async function autoCalibrateFromResults(){
     for(const bid in betsLog){
       const b=betsLog[bid]; if(b.result!=null) continue;
       const f=finals[bid.split(':')[1]]; if(f==null) continue;
-      // (Full-game MLB bets are reference-only and never logged, so the old
-      //  league==='MLB' branch was unreachable and referenced a missing field.)
       if(b.league==='MLBF5' && f.f5) gradeBet(bid,                                                 // first-5-innings
         (b.side==='home'&&f.f5==='H')||(b.side==='away'&&f.f5==='A')||(b.side==='tie'&&f.f5==='T'));
+      // Full-game flags are logged again as of Aug 7 2026, so this branch is
+      // live. `side` is written as 'home'/'away' at log time; f.hw is 1 when the
+      // home team won and null on a suspended/tied game, which we skip.
+      else if(b.league==='MLB' && f.hw!=null) gradeBet(bid,
+        (b.side==='home'&&f.hw===1)||(b.side==='away'&&f.hw===0));
     }
     if(n>0) console.info(`Auto-calibrated on ${n} real result(s). Platt a=${NN_PLATT.a.toFixed(3)} b=${NN_PLATT.b.toFixed(3)}`);
   }catch(err){ console.warn('Auto-calibration skipped:',err.message); }
@@ -2744,7 +2763,9 @@ async function loadModelRecords(){
       if(H.wins+H.losses>=15 && A.wins+A.losses>=15){
         const kh=starterKBB[g.hpid]??null, ka=starterKBB[g.apid]??null;
         const p=realModelRawStats(H,A,kh,ka);
-        if(p!=null) graded.push({date:g.date,correct:((p>=0.5)===(hw===1)),conf:Math.max(p,1-p)});
+        // homeWon is carried so the naive "always pick home" baseline can be
+        // measured from this same replay rather than hard-coded.
+        if(p!=null) graded.push({date:g.date,correct:((p>=0.5)===(hw===1)),conf:Math.max(p,1-p),homeWon:hw===1});
         // F5 headline model — did it call the first-5-innings leader (3-way)?
         if(g.f5a){ const p5=f5ProbsStats(H,A,kh,ka);
           if(p5){ const pick=[['H',p5.h],['T',p5.t],['A',p5.a]].reduce((m,x)=>x[1]>m[1]?x:m)[0];
@@ -2767,23 +2788,32 @@ async function loadModelRecords(){
     const sT=tally(graded);
     const c60=tally(graded.filter(x=>x.conf>=0.60));
     const c70=tally(graded.filter(x=>x.conf>=0.70));
-    // ── F5 HEADLINE record (season replay) + naive base rate (always pick F5 home-lead) ──
+    // ── Baselines, measured from the SAME replay, not assumed ────────────────
+    // Every accuracy claim is stated against the naive rule it has to beat:
+    // full game = "always pick the home team"; F5 = "always pick the home lead".
+    // Both are computed from the replay itself so they track the real season.
+    const fgBase = graded.length ? Math.round(graded.filter(x=>x.homeWon).length/graded.length*100) : 52;
+    const fgPct  = sT.n ? Math.round(sT.w/sT.n*100) : 0;
+    const fgEdge = fgPct - fgBase;
+
     const f5y=tally(gradedF5.filter(x=>x.date===ystr)), f5w=tally(gradedF5.filter(x=>x.date>=w7str)), f5s=tally(gradedF5);
-    const f5base = f5s.n ? Math.round(gradedF5.filter(x=>x.act==='H').length/f5s.n*100) : 44;
+    const f5base = f5s.n ? Math.round(gradedF5.filter(x=>x.act==='H').length/f5s.n*100) : 45;
     const f5pct  = f5s.n ? Math.round(f5s.w/f5s.n*100) : 0;
-    const f5edge = f5pct - f5base;   // edge over the naive "always pick the F5 home-lead" baseline
-    const line0 = f5s.n
-      ? `&#x26BE; <b>First 5 Innings model</b> <span style="color:#86efac">(headline)</span> &nbsp;·&nbsp; Yesterday ${fmt(f5y)} &nbsp;·&nbsp; Last 7d ${fmt(f5w)} &nbsp;·&nbsp; Season ${fmt(f5s)} <span style="color:${f5edge>=0?'#86efac':'#f87171'}">— calls the F5 leader (3-way) ${f5edge>=0?'+':''}${f5edge} pts vs the ${f5base}% base rate</span>`
+    const f5edge = f5pct - f5base;
+
+    // Full game is the HEADLINE model: it is the only one of the two that beats
+    // its naive baseline by a margin the season replay can actually resolve.
+    const line0=`&#x1F4CA; <b>Full-game model</b> <span style="color:#86efac">(headline)</span> &nbsp;·&nbsp; Yesterday ${fmt(yT)} &nbsp;·&nbsp; Last 7d ${fmt(wT)} &nbsp;·&nbsp; Season ${fmt(sT)} <span style="color:${fgEdge>=0?'#86efac':'#f87171'}">— ${fgEdge>=0?'+':''}${fgEdge} pts vs the ${fgBase}% home-team base rate</span>`;
+    const line1 = f5s.n
+      ? `&#x26BE; <b>First 5 Innings model</b> <span style="color:var(--dim2)">(reference · paper only)</span> &nbsp;·&nbsp; Yesterday ${fmt(f5y)} &nbsp;·&nbsp; Last 7d ${fmt(f5w)} &nbsp;·&nbsp; Season ${fmt(f5s)} <span style="color:${f5edge>=0?'var(--dim)':'#f87171'}">— ${f5edge>=0?'+':''}${f5edge} pts vs the ${f5base}% home-lead base rate</span>`
       : '';
-    const line1=`&#x1F4CA; <b>Full-game model</b> <span style="color:var(--dim2)">(reference)</span> &nbsp;·&nbsp; Yesterday ${fmt(yT)} &nbsp;·&nbsp; Last 7d ${fmt(wT)} &nbsp;·&nbsp; Season ${fmt(sT)}`;
     const line2=`&#x1F3AF; <b>When confident</b> (full-game, season) &nbsp;·&nbsp; gave &ge;60% ${fmt(c60)} &nbsp;·&nbsp; gave &ge;70% ${fmt(c70)}`;
     // ── Collapsed headline + expandable detail ────────────────────────────────
     // The three full lines cost ~170px above the fold on a phone, which is most
     // of a screen spent on numbers you only check occasionally. Collapse to the
     // single number that matters and keep the rest one tap away.
-    const headStat = f5s.n
-      ? `&#x26BE; <b>F5 model</b> ${fmt(f5s)} season <span style="color:${f5edge>=0?'#86efac':'#f87171'}">${f5edge>=0?'+':''}${f5edge} pts vs base</span>`
-      : `&#x1F4CA; <b>Full-game model</b> ${fmt(sT)} season`;
+    // Kept short enough to stay on ONE line at 375px — the strip is above the fold.
+    const headStat = `&#x1F4CA; <b>Full game</b> ${fmt(sT)} &nbsp;·&nbsp; <span style="color:${fgEdge>=0?'#86efac':'#f87171'}">${fgEdge>=0?'+':''}${fgEdge} vs base</span>`;
     const html =
       `<div class="rec-head" id="rec-head" role="button" tabindex="0" aria-expanded="false" aria-controls="rec-detail">`+
         `<span class="rec-stat">${headStat}</span>`+
@@ -3098,26 +3128,36 @@ function f5ServerHtml(){
   return `<div class="bb-foot">&#x1F310; Server log (post-fix, browser-independent): ${n} games logged · ${body}</div>`;
 }
 
-// Build the "Today's Best Bets" strip from BEST_BETS, insert after the header.
+// Build the F5 signal strip from BEST_BETS, insert after the header.
+//
+// DEMOTED to paper-only (Aug 7 2026). The server-side forward log over 38 graded
+// flags returned −24.9% ROI, and ROI got monotonically WORSE as the model's own
+// claimed edge grew (≥1.5¢ −24.9%, ≥4¢ −43.5%, ≥5¢ −60.6%, ≥7¢ −81.8%, 1-12).
+// A real edge improves when you tighten the threshold; this inverts, which means
+// a big claimed edge is measuring the size of the model's error, not the
+// market's. Corroborating: it flags ~41% of all games as +EV against a liquid
+// market, which is not plausible. So the model keeps running and keeps grading
+// itself — that is how the question gets settled — but stake sizing is gone and
+// nothing here is presented as a bet to place.
 function renderBestBets(container, hdr){
   const valuePlays = BEST_BETS.filter(b=>!b.totals).sort((a,b)=>b.roi-a.roi);
   const card=document.createElement('div');
-  card.className='best-bets';
+  card.className='best-bets bb-paper';
   const roi=betsROIHtml('MLBF5')+f5ServerHtml();
+  const title=`<div class="bb-title">&#x1F9EA; F5 Model Signals <span class="bb-paper-tag">paper only</span></div>`;
   if(!valuePlays.length){
-    card.innerHTML=`<div class="bb-title">&#x1F3AF; Today's Best Bets <span style="font-weight:400;opacity:.6;font-size:.62rem">First 5 Innings</span></div>
-      <div class="bb-empty">No F5 edges vs Kalshi today — the model agrees with the KXMLBF5 market. Sit tight.</div>${roi}`;
+    card.innerHTML=`${title}
+      <div class="bb-empty">No F5 divergence from the KXMLBF5 market today.</div>${roi}`;
   }else{
     let rows='';
     for(const b of valuePlays.slice(0,6)){
       rows+=`<div class="bb-row"><span class="bb-mu">${b.matchup}</span>
         <span class="bb-pick">${b.pick||b.team}</span>
-        <span class="bb-edge">+${(b.roi*100).toFixed(0)}% ROI</span>
-        <span class="bb-stake">${(b.stakeFrac*100).toFixed(1)}% bankroll</span></div>`;
+        <span class="bb-edge bb-edge-muted">${(b.roi*100).toFixed(0)}% claimed</span></div>`;
     }
-    card.innerHTML=`<div class="bb-title">&#x1F3AF; Today's Best Bets <span class="bb-count">${valuePlays.length}</span> <span style="font-weight:400;opacity:.6;font-size:.62rem">First 5 Innings</span></div>
+    card.innerHTML=`${title}
       ${rows}
-      <div class="bb-foot">First-5-innings value: model F5 prob beats the Kalshi KXMLBF5 ask after fees (expected ROI above; realized ROI below). F5 is starter-driven; backtested but a modest edge. Not financial advice.</div>${roi}`;
+      <div class="bb-foot"><b>These are not recommendations.</b> Each row is where the F5 model disagrees with the Kalshi KXMLBF5 ask — tracked to measure whether the model has an edge, not to be bet. The live log below is the answer so far: over 38 graded flags the realized ROI was <b>negative</b>, and it got worse as the claimed edge got bigger — the signature of model error rather than market mispricing. Stake sizing was removed on purpose. Re-entry bar: flag rate under ~5% and a positive closing-line record over 100+ flags.</div>${roi}`;
   }
   hdr.insertAdjacentElement('afterend', card);
 }
