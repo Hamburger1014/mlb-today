@@ -144,6 +144,26 @@
     .bb-type-ml{background:rgba(58,138,232,.18);color:#60a5fa;border:1px solid rgba(58,138,232,.3)}
     .bb-type-sp{background:rgba(20,184,166,.18);color:#2dd4bf;border:1px solid rgba(20,184,166,.3)}
     .bb-stake{color:var(--dim);font-size:.74rem;margin-left:auto}
+    .bb-need{color:#7dd3fc;font-size:.72rem;font-weight:600;white-space:nowrap}
+    /* Fair Value Board — dense on purpose: it is a scan-and-compare screen. */
+    .fv-tbl{width:100%;border-collapse:collapse;font-size:.82rem}
+    .fv-tbl thead th{text-align:left;font-size:.66rem;text-transform:uppercase;letter-spacing:.05em;
+      color:var(--dim2);font-weight:600;padding:8px 10px;border-bottom:1px solid var(--line)}
+    .fv-tbl td{padding:7px 10px;vertical-align:middle}
+    .fv-tbl tr.fv-first td{border-top:1px solid var(--line)}
+    .fv-game{white-space:nowrap}
+    .fv-game .fv-meta{display:block;font-size:.64rem;color:var(--dim2);font-weight:400;margin-top:2px}
+    .fv-side{color:var(--dim);white-space:nowrap}
+    .fv-fair{font-variant-numeric:tabular-nums;text-align:right;width:4.5rem}
+    .fv-need{font-variant-numeric:tabular-nums;text-align:right;width:5rem;color:#7dd3fc;font-weight:700}
+    .fv-src{font-size:.66rem;color:var(--dim2);white-space:nowrap}
+    .fv-tbl tr.fv-sp td{padding-top:0;font-size:.76rem;opacity:.85}
+    @media(max-width:580px){
+      .fv-tbl{font-size:.76rem}
+      .fv-tbl td,.fv-tbl thead th{padding:6px 6px}
+      .fv-src{display:none}
+      .fv-tbl thead th:last-child{display:none}
+    }
     .bb-ok{color:var(--green);font-size:.7rem}
     /* Paper-only variant: the green "go bet this" styling is deliberately
        stripped so an unproven signal never reads like a recommendation. */
@@ -560,6 +580,7 @@
   <div class="nav-head">Sections</div>
   <button class="nav-item active" data-view="mlb" onclick="switchView('mlb')">⚾ MLB Today</button>
   <button class="nav-item" data-view="wnba" onclick="switchView('wnba')">🏀 WNBA Today</button>
+  <button class="nav-item" data-view="fv" onclick="switchView('fv')">📋 Fair Value</button>
 </nav>
 
 <!-- Legend is a native <details>: collapsed by default so the first game card sits
@@ -613,6 +634,19 @@
   </main>
 </div>
 
+<!-- ── FAIR VALUE BOARD ──
+     The one screen that does not involve a model. Sharp price in, de-vigged
+     fair value out, and the worst price still worth taking. That comparison is
+     right whether or not any prediction here is any good, it works in every
+     sport, and it does not expire when a season does. -->
+<div id="fv-view" style="display:none">
+  <div class="view-intro">📋 <b>Fair Value Board</b> · De-vigged fair price from the sharpest source available, and the <b>worst number still worth taking</b>. No model involved — this is a price comparison. Take the "need" column to a soft book (Fliff) and bet only when its price is <b>longer</b> than the number shown.</div>
+  <main>
+    <div id="fv-status" role="status" aria-live="polite" style="text-align:center;padding:30px;color:var(--dim)">Loading prices…</div>
+    <div id="fv-board"></div>
+  </main>
+</div>
+
 <footer>MLB Today · MLB Stats API + ESPN · Kalshi Markets · Consensus blends model (20–25%) + Vegas (50%) + ESPN (30%) · Model: logistic regression trained on 7,300 real MLB games 2022–24 (56.6% walk-forward; 60–66% on confident picks) + Platt auto-calibration · Features: Pythagorean, win%, run-diff, starting-pitcher ERA, home edge · ROI engine: 9-book devigged fair value vs Kalshi price, fee-aware EV + ¼-Kelly stake · First-5-Innings model is paper-only (reference): its forward log returned a negative ROI that worsened as its claimed edge grew, so its signals are tracked, not bet</footer>
 
 <script>
@@ -653,14 +687,90 @@ function switchView(v){
   ACTIVE_VIEW=v;
   document.getElementById('mlb-view').style.display  = v==='mlb'?'':'none';
   document.getElementById('wnba-view').style.display = v==='wnba'?'':'none';
-  document.getElementById('hdr-logo').textContent    = v==='wnba'?'🏀':'⚾';
-  document.getElementById('hdr-title').textContent   = v==='wnba'?'WNBA Today':'MLB Today';
+  document.getElementById('fv-view').style.display   = v==='fv'?'':'none';
+  const ICON={mlb:'⚾',wnba:'🏀',fv:'📋'}, NAME={mlb:'MLB Today',wnba:'WNBA Today',fv:'Fair Value'};
+  document.getElementById('hdr-logo').textContent    = ICON[v]||'⚾';
+  document.getElementById('hdr-title').textContent   = NAME[v]||'MLB Today';
   document.querySelectorAll('.nav-item').forEach(b=>b.classList.toggle('active',b.dataset.view===v));
   toggleMenu();
   if(v==='wnba'){ stopLiveScorePolling(); if(!wnbaLoaded){ wnbaLoaded=true; WNBA.load(); } }
+  else if(v==='fv'){
+    stopLiveScorePolling();
+    // The board reads whatever the two views have already priced. WNBA loads
+    // lazily, so kick it off (into its hidden container) the first time.
+    if(!wnbaLoaded){ wnbaLoaded=true; WNBA.load().then(renderFairValue).catch(()=>{}); }
+    renderFairValue();
+  }
   else if(v==='mlb' && !_liveTimer && document.querySelector('#games-container .game-card')) startLiveScorePolling();
 }
-function refreshActiveView(){ ACTIVE_VIEW==='wnba' ? WNBA.load() : init(); }
+function refreshActiveView(){
+  if(ACTIVE_VIEW==='wnba') return WNBA.load();
+  if(ACTIVE_VIEW==='fv')   return Promise.resolve(WNBA.load()).then(renderFairValue).catch(()=>renderFairValue());
+  init();
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  FAIR VALUE BOARD
+//  Each view publishes its priced games here as it renders; the board is a
+//  pure read of that. Deliberately model-free: `fair` is the de-vigged market
+//  price, never a prediction, so a row is right even on days the models are not.
+// ═══════════════════════════════════════════════════════════════
+const FV_ROWS={mlb:[],wnba:[]};
+function fvPublish(league,row){
+  const a=FV_ROWS[league]; if(!a) return;
+  const i=a.findIndex(r=>r.id===row.id);
+  if(i>=0) a[i]=row; else a.push(row);
+}
+function fvClear(league){ if(FV_ROWS[league]) FV_ROWS[league].length=0; }
+function renderFairValue(){
+  const rows=[...FV_ROWS.mlb,...FV_ROWS.wnba]
+    .filter(r=>r.fairHome!=null)
+    .sort((a,b)=>(a.start||0)-(b.start||0));
+  const status=document.getElementById('fv-status'), board=document.getElementById('fv-board');
+  if(!rows.length){
+    status.style.display=''; board.innerHTML='';
+    status.textContent='No priced games yet — open MLB or WNBA once so prices load, then come back.';
+    return;
+  }
+  status.style.display='none';
+  // Freshness is not decoration here. Every number below is a PRICE, and acting
+  // on a stale price is the one way this screen can lose money on its own — the
+  // model can be wrong and the board still right, but a stale fair value is
+  // simply the wrong number. Say how old it is, loudly, above the table.
+  const ageMin=kalshiAgeMin();
+  const usesKalshi=rows.some(r=>/Kalshi/.test(r.source||''));
+  let fresh='';
+  if(usesKalshi && ageMin!=null){
+    const bad=ageMin>35;
+    fresh=`<div class="bb-foot" style="margin:0;padding:10px 18px;color:${bad?'#f87171':'#fbbf24'}">`
+      +`${bad?'&#x26A0;&#xFE0F;':'&#x1F551;'} Kalshi rows are priced off a <b>${ageMin}-min-old</b> snapshot, not a live quote`
+      +`${bad?' — too old to act on. Refresh, or price these from a live source.':'.'}</div>`;
+  }
+  let html=fresh+'<table class="fv-tbl"><thead><tr><th>Game</th><th>Side</th><th>Fair</th><th>Need</th><th>Source</th></tr></thead><tbody>';
+  for(const r of rows){
+    const t=r.start?new Date(r.start).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}):'';
+    const legs=[[r.away,1-r.fairHome],[r.home,r.fairHome]];
+    legs.forEach(([side,p],i)=>{
+      html+=`<tr class="${i===0?'fv-first':''}">`
+        +(i===0?`<td rowspan="2" class="fv-game"><b>${esc(r.away)}@${esc(r.home)}</b><span class="fv-meta">${esc(r.league)} · ${t}</span></td>`:'')
+        +`<td class="fv-side">${esc(side)}</td>`
+        +`<td class="fv-fair">${(p*100).toFixed(1)}%</td>`
+        +`<td class="fv-need">${fvAmer(breakEvenAmerican(p))}</td>`
+        +(i===0?`<td rowspan="2" class="fv-src">${esc(r.source)}</td>`:'')
+        +'</tr>';
+    });
+    if(r.spreadLine!=null && r.spreadFairHome!=null){
+      html+=`<tr class="fv-sp"><td class="fv-side">spread ${fvLine(r.spreadLine)} ${esc(r.home)}</td>`
+        +`<td class="fv-fair">${(r.spreadFairHome*100).toFixed(1)}%</td>`
+        +`<td class="fv-need">${fvAmer(breakEvenAmerican(r.spreadFairHome))}</td><td></td><td></td></tr>`;
+    }
+  }
+  html+='</tbody></table>';
+  board.innerHTML=html+'<div class="bb-foot" style="padding:12px 18px">'
+    +'<b>How to use it.</b> "Need" is the worst American price at which that side is still break-even. Bet it only at a <b>longer</b> price than shown — −140 is a bet when the need says −155, and a pass when the need says −130. The fair column is the de-vigged market, so it already contains everything the market knows; you are not being paid for an opinion here, you are being paid for a better price. Prices are as fresh as the source view — hit Refresh before acting.</div>';
+}
+function fvAmer(v){ return v==null?'—':(v>0?'+'+v:String(v)); }
+function fvLine(l){ return l==null?'':(l>0?'+'+l:String(l)); }
 
 // ═══════════════════════════════════════════════════════════════
 //  LEGEND DISCLOSURE
@@ -1038,25 +1148,53 @@ const STADIUM_LL={ARI:[33.445,-112.067],ATL:[33.890,-84.468],BAL:[39.284,-76.622
  OAK:[37.752,-122.200],PHI:[39.906,-75.166],PIT:[40.447,-80.006],SD:[32.708,-117.157],SEA:[47.591,-122.332],
  SFG:[37.778,-122.389],STL:[38.623,-90.193],TB:[27.768,-82.653],TEX:[32.747,-97.082],TOR:[43.641,-79.389],WSH:[38.873,-77.007]};
 const FIXED_DOME=new Set(['TB']);   // retractables (HOU,TEX,MIL,ARI,SEA,TOR,MIA) keep outdoor reading
+// Weather for the whole slate in ONE request. Open-Meteo accepts comma-separated
+// coordinate lists and returns an array of location objects in the same order,
+// so 15 games became 15 parallel round-trips (~1s each, 12.6s of cumulative
+// network time) for no reason. Forecasts are also cached for an hour: the hourly
+// grid does not move faster than that, and a refresh should cost zero requests.
+const _WX_TTL=3600e3;
+function _wxCache(){ try{ return JSON.parse(localStorage.getItem('mlb_wx_v1')||'{}'); }catch(e){ return {}; } }
 async function fetchWeather(mlbGames){
-  await Promise.all(mlbGames.map(async g=>{
-    const ab=g.homeAbbr; if(gameWeather[g.gamePk]) return;
-    if(FIXED_DOME.has(ab)){ gameWeather[g.gamePk]={t:72,w:0}; return; }
-    const ll=STADIUM_LL[ab]; if(!ll) return;
+  const cache=_wxCache(), now=Date.now();
+  const need=new Map();                      // abbr -> [lat,lon], deduped across games
+  for(const g of mlbGames){
+    const ab=g.homeAbbr;
+    if(gameWeather[g.gamePk]) continue;
+    if(FIXED_DOME.has(ab)){ gameWeather[g.gamePk]={t:72,w:0}; continue; }
+    if(!STADIUM_LL[ab]) continue;
+    const c=cache[ab];
+    if(!(c && now-c.ts<_WX_TTL && c.hourly)) need.set(ab, STADIUM_LL[ab]);
+  }
+  if(need.size){
+    const abbrs=[...need.keys()];
     try{
-      const u=`https://api.open-meteo.com/v1/forecast?latitude=${ll[0]}&longitude=${ll[1]}`+
+      const lats=abbrs.map(a=>need.get(a)[0]).join(','), lons=abbrs.map(a=>need.get(a)[1]).join(',');
+      const u=`https://api.open-meteo.com/v1/forecast?latitude=${lats}&longitude=${lons}`+
         `&hourly=temperature_2m,wind_speed_10m&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=UTC&forecast_days=2`;
-      const r=await fetch(u); if(!r.ok) return; const d=await r.json();
-      const hh=d.hourly, t=g.gameTime? new Date(g.gameTime):new Date();
-      const key=t.toISOString().slice(0,13)+':00';
-      let i=hh.time.indexOf(key); if(i<0) i=hh.time.findIndex(x=>x>=key); if(i<0) i=0;
-      const _t=hh.temperature_2m[i], _w=hh.wind_speed_10m[i];
-      // Guard against null/NaN hourly readings — an unchecked NaN propagates into
-      // totalModel and renders "NaN" projected totals. Skip → neutral fallback.
-      if(Number.isFinite(_t) && Number.isFinite(_w))
-        gameWeather[g.gamePk]={t:Math.round(_t), w:Math.round(_w)};
+      const r=await fetch(u);
+      if(r.ok){
+        const d=await r.json();
+        // Single-coordinate requests return an object, multi returns an array.
+        const arr=Array.isArray(d)?d:[d];
+        abbrs.forEach((ab,i)=>{ if(arr[i]&&arr[i].hourly) cache[ab]={ts:now,hourly:arr[i].hourly}; });
+        try{ localStorage.setItem('mlb_wx_v1',JSON.stringify(cache)); }catch(e){}
+      }
     }catch(e){}
-  }));
+  }
+  for(const g of mlbGames){
+    const ab=g.homeAbbr;
+    if(gameWeather[g.gamePk]) continue;
+    const hh=cache[ab] && cache[ab].hourly; if(!hh) continue;
+    const t=g.gameTime? new Date(g.gameTime):new Date();
+    const key=t.toISOString().slice(0,13)+':00';
+    let i=hh.time.indexOf(key); if(i<0) i=hh.time.findIndex(x=>x>=key); if(i<0) i=0;
+    const _t=hh.temperature_2m[i], _w=hh.wind_speed_10m[i];
+    // Guard against null/NaN hourly readings — an unchecked NaN propagates into
+    // totalModel and renders "NaN" projected totals. Skip → neutral fallback.
+    if(Number.isFinite(_t) && Number.isFinite(_w))
+      gameWeather[g.gamePk]={t:Math.round(_t), w:Math.round(_w)};
+  }
 }
 
 // ── Live starter K-BB% qualities (one batched statsapi call) ─────────────
@@ -1936,6 +2074,95 @@ async function fetchKalshiF5(){
   if(events.length) _kCacheSet('kxmlbf5', events);
   return events;
 }
+/* ═══ MARKET DISCIPLINE ══════════════════════════════════════════════════
+   Measured 2026-08-09 — scripts/market_edge_test.py (120 MLB F5 games) and
+   wnba_model/wnba_backfill.py (214 backfilled 2026 WNBA games).
+
+   The benchmark is the de-vigged market price, not the base rate. A model can
+   beat the base rate by a mile and still be worthless to bet, because the price
+   already contains everything the model knows plus lineups, weather and money.
+   Three corrections are applied to every value number on this page:
+
+   1. SHRINK TO MARKET. Fair value is a logit pool of model and market instead
+      of the raw model. Without it the engine holds its own probability fixed
+      while the price moves, so a market moving AGAINST a pick makes that side
+      cheaper and the displayed edge GROWS — the engine selects for its own
+      errors. Measured on F5 flags: +7.7pp claimed edge, −6.7pp realised.
+   2. MOVED-AGAINST VETO. A price moving away from a pick is information
+      arriving, not value appearing. Kill the flag instead of upgrading it.
+   3. CORRELATED EXPOSURE. F5 winner, game winner, spread and total on one game
+      are a single underlying result. Sizing them independently multiplies one
+      position, so total stake is capped per game and per day.
+
+   Each market's weight `w` is the fitted β_model/(β_model+β_market) from that
+   measurement. w = 0 means "the model adds nothing here", which is not an
+   opinion — it is what 120 games said. */
+const MARKET_EVIDENCE = {
+  MLBF5:  {bet:false, w:0.00, why:'REFUTED 2026-08-09 on 120 games. Model log-loss 1.0137 vs market 0.9889 — and vs 0.9912 for simply quoting the base rate. CLV −0.87pp (z=−2.65 clustered by date), flagged plays 14–38, −25% ROI.'},
+  MLBGAME:{bet:false, w:0.00, why:'Not measured directly, but it is the same Kalshi market family that refuted F5, and the 57.2% full-game model sits below the ~58–59% rate at which market favourites win. Reference only until measured.'},
+  WNBAML: {bet:true,  w:0.15, why:'Unproven, not refuted. 214 backfilled games: β_model +0.35 (p=0.29) with a lookahead injury feature, +0.07 (p=0.87) without it. Live sits between the two, so w is set near the honest end.'},
+  WNBASP: {bet:true,  w:0.40, why:'Best segment measured: model ATS 56.5% vs 52.4% break-even (p=0.095), optimal shrink 0.37–0.45. Still unproven — needs ~583 bets for 2σ, so CLV decides it, not P&L.'},
+};
+function _logit(p){ p=Math.min(1-1e-6,Math.max(1e-6,p)); return Math.log(p/(1-p)); }
+function _ilogit(z){ return 1/(1+Math.exp(-Math.max(-30,Math.min(30,z)))); }
+// Precision-weighted fair value. w is this market's measured model weight.
+function blendFair(pModel,pMarket,w){
+  if(pModel==null) return pMarket;
+  if(pMarket==null) return pModel;          // no price to shrink toward
+  return _ilogit(w*_logit(pModel)+(1-w)*_logit(pMarket));
+}
+// Power de-vig: solve Σ qᵢ^k = 1. Books load more margin on longshots than the
+// usual proportional method assumes, so proportional over-states the cheap leg
+// — the 3-way tie, heavy underdogs. That is the same direction as every other
+// bias in this stack, so it compounds rather than cancels.
+function devigPower(raw){
+  if(!raw||raw.some(x=>x==null||!(x>0))) return null;
+  const s=raw.reduce((a,b)=>a+b,0);
+  if(s<=1) return raw.map(x=>x/s);
+  let lo=0.5,hi=5;
+  for(let i=0;i<100;i++){
+    const k=(lo+hi)/2;
+    if(raw.reduce((a,b)=>a+Math.pow(b,k),0)>1) lo=k; else hi=k;
+  }
+  const k=(lo+hi)/2;
+  return raw.map(x=>Math.pow(x,k));
+}
+// First market price seen for a side today, so we can tell whether the price
+// has since moved against it. Keyed per day; stale days are dropped on write.
+const MOVE_VETO=0.02;
+let _MKT_SEEN=(()=>{ try{ return JSON.parse(localStorage.getItem('mkt_first_seen_v1')||'{}'); }catch(e){ return {}; } })();
+function marketDrift(key,pNow){
+  if(key==null||pNow==null) return 0;
+  const today=new Date().toISOString().slice(0,10);
+  const rec=_MKT_SEEN[key];
+  if(!rec||rec.d!==today){
+    for(const k in _MKT_SEEN) if(_MKT_SEEN[k].d!==today) delete _MKT_SEEN[k];
+    _MKT_SEEN[key]={d:today,p:pNow};
+    try{ localStorage.setItem('mkt_first_seen_v1',JSON.stringify(_MKT_SEEN)); }catch(e){}
+    return 0;
+  }
+  return rec.p-pNow;      // >0 ⇒ this side got cheaper ⇒ market moved against it
+}
+// Correlated-exposure caps, as a fraction of bankroll.
+const MAX_STAKE_GAME=0.02, MAX_STAKE_DAY=0.06;
+function capExposure(plays,stakeOf,gameOf){
+  let day=0; const perGame={};
+  for(const p of plays){
+    const g=gameOf(p), want=stakeOf(p);
+    const room=Math.min(MAX_STAKE_GAME-(perGame[g]||0), MAX_STAKE_DAY-day, want);
+    p.stakeCapped=Math.max(0,room);
+    perGame[g]=(perGame[g]||0)+p.stakeCapped; day+=p.stakeCapped;
+  }
+  return plays;
+}
+// Fair value expressed the way a soft book quotes it: the worst American price
+// that is still +EV. This is the number that actually makes money — it needs no
+// model, only a sharp price to de-vig, and it is what you compare Fliff against.
+function breakEvenAmerican(p){
+  if(p==null||p<=0||p>=1) return null;
+  return p>=0.5 ? -Math.round(100*p/(1-p)) : Math.round(100*(1-p)/p);
+}
+
 // 3-way de-vigged F5 market probs + raw asks from a matched KXMLBF5 event.
 function f5Market(ev, homeName, awayName){
   if(!ev) return null;
@@ -1946,30 +2173,54 @@ function f5Market(ev, homeName, awayName){
   const mh=mid(hm), ma=mid(am), mt=mid(tm);
   if(mh==null||ma==null||mt==null) return null;
   const s=mh+ma+mt; if(s<=0) return null;
-  return {h:mh/s, t:mt/s, a:ma/s,
+  // Power de-vig rather than proportional: the tie is the cheap leg, and
+  // proportional systematically inflates it — the same direction as the
+  // Poisson bias that used to make every tie look like a bet.
+  const dv=devigPower([mh,mt,ma]) || [mh/s,mt/s,ma/s];
+  return {h:dv[0], t:dv[1], a:dv[2],
     askH:marketBidAsk(hm).ask, askA:marketBidAsk(am).ask, askT:marketBidAsk(tm).ask,
+    bidH:marketBidAsk(hm).bid, bidA:marketBidAsk(am).bid, bidT:marketBidAsk(tm).bid,
     event:ev.event_ticker};
 }
 // Best +EV F5 outcome: model prob vs Kalshi ask, fee-aware. STRICTER thresholds
 // than full-game (no sharp-book confirmation exists for the F5 market).
-function f5Evaluate(model, mkt, homeAbbr, awayAbbr){
+function f5Evaluate(model, mkt, homeAbbr, awayAbbr, gamePk){
   if(!model||!mkt) return null;
+  const EV=MARKET_EVIDENCE.MLBF5;
   const sides=[
-    {key:'home', pick:homeAbbr+' F5', fair:model.h, price:mkt.askH},
-    {key:'away', pick:awayAbbr+' F5', fair:model.a, price:mkt.askA},
-    {key:'tie',  pick:'Tie F5',       fair:model.t, price:mkt.askT},
+    {key:'home', pick:homeAbbr+' F5', raw:model.h, mkt:mkt.h, price:mkt.askH, bid:mkt.bidH},
+    {key:'away', pick:awayAbbr+' F5', raw:model.a, mkt:mkt.a, price:mkt.askA, bid:mkt.bidA},
+    {key:'tie',  pick:'Tie F5',       raw:model.t, mkt:mkt.t, price:mkt.askT, bid:mkt.bidT},
   ];
   let best=null;
   for(const s of sides){
     if(s.price==null||isNaN(s.price)||s.price<=0.02||s.price>=0.98) continue;
+    // This card is a MEASUREMENT INSTRUMENT, not a bet slip, so the signal is
+    // still computed off the raw model — shrinking it to w=0 would silence the
+    // very disagreement we are tracking. `fairBlended` shows how much of the
+    // claimed edge survives shrinkage, which is the whole lesson in one number.
+    s.fair=s.raw;
+    s.fairBlended=blendFair(s.raw, s.mkt, EV.w);
     const fee=KALSHI_FEE*s.price*(1-s.price);
     const netEV=s.fair-s.price-fee, roi=netEV/s.price;
     if(netEV>=0.025 && roi>=0.05){
       const kelly=Math.max(0,(s.fair-s.price)/(1-s.price));
       const stakeFrac=Math.min(0.05, KELLY_FRACTION*kelly);
-      if(!best||netEV>best.netEV) best={...s, fee, netEV, roi, stakeFrac};
+      // Maker fee is 25% of taker on Kalshi and 0 on most non-marquee markets.
+      // At 50c that is 1.75c vs ~0.44c — more than half of the 2.5c EV floor.
+      // If this market is ever re-enabled, post a resting limit; don't take.
+      const maker=(s.bid!=null&&s.bid>0)?Math.min(s.price, s.bid+0.01):null;
+      // A price that has moved against this side since first sight is the market
+      // learning something we don't have — record it rather than reading it as
+      // a bigger edge.
+      const drift=marketDrift('f5:'+gamePk+':'+s.key, s.mkt);
+      if(!best||netEV>best.netEV) best={...s, fee, netEV, roi, stakeFrac, maker,
+        movedAgainst:drift>MOVE_VETO,
+        netEVBlended:s.fairBlended-s.price-fee,
+        makerEV:maker!=null?(s.fair-maker-0.25*KALSHI_FEE*maker*(1-maker)):null};
     }
   }
+  if(best) best.bettable = EV.bet;   // false — see MARKET_EVIDENCE.MLBF5
   return best;
 }
 
@@ -2109,9 +2360,13 @@ function renderGame(game, extras){
   const f5tot = f5 ? f5Totals(homeAbbr, awayAbbr, homeKBBq, awayKBBq) : null;   // F5 O/U model
   // F5 market (Kalshi KXMLBF5, 3-way) + model value play vs the ask
   const f5mkt = f5Market(kalshiF5Event, homeName, awayName);    // {h,t,a,askH,askA,askT} or null
-  const f5bet = (f5 && f5mkt) ? f5Evaluate(f5, f5mkt, homeAbbr, awayAbbr) : null;
-  if(f5bet && (!game.live || game.live.homeScore==null)){       // pregame only
+  const f5bet = (f5 && f5mkt) ? f5Evaluate(f5, f5mkt, homeAbbr, awayAbbr, game.gamePk) : null;
+  // Paper only — MARKET_EVIDENCE.MLBF5.bettable is false. These rows keep
+  // accruing so the closing-line record can settle the re-entry question; they
+  // are deliberately never sized or recommended.
+  if(f5bet && (!game.live || game.live.homeScore==null)){
     BEST_BETS.push({matchup:`${awayAbbr}@${homeAbbr}`, pick:f5bet.pick, fair:f5bet.fair,
+      shrunk:f5bet.netEVBlended, movedAgainst:f5bet.movedAgainst,
       price:f5bet.price, roi:f5bet.roi, stakeFrac:f5bet.stakeFrac, f5:true});
     logBet('mlbf5:'+game.gamePk+':'+f5bet.key, {league:'MLBF5', date:new Date().toISOString().slice(0,10),
       matchup:`${awayAbbr}@${homeAbbr}`, pick:f5bet.pick, side:f5bet.key, price:f5bet.price});
@@ -2181,8 +2436,29 @@ function renderGame(game, extras){
   // DraftKings line ESPN already carries (1 book) so the books-agree check is live
   // either way. Auto-upgrades to the multi-book consensus once a key is configured.
   const fairHomeSharp = _so ? _so.fairHome : ((odds && odds.homeP!=null) ? odds.homeP : null);
+
   const fairBooks     = _so ? _so.nBooks   : ((odds && odds.homeP!=null) ? 1 : 0);
   const _asks = kalshiAsks(kalshiEvent,homeAbbr,homeName,awayAbbr,awayName);
+
+  // Publish to the Fair Value Board. Kalshi first: it is the most liquid price
+  // available here and tracks the sharp books to about a cent, so its de-vigged
+  // mid is the best oracle on hand. Books are the fallback, not the preference.
+  // (Must sit AFTER _asks — reading it earlier is a temporal-dead-zone throw
+  //  that the render loop's try/catch would swallow, silently dropping the card.)
+  (function(){
+    let fairHome=null, source=null;
+    const dv=(_asks&&_asks.homeAsk!=null&&_asks.awayAsk!=null)
+      ? devigPower([_asks.homeAsk,_asks.awayAsk]) : null;
+    if(dv){ fairHome=dv[0]; source='Kalshi (de-vigged)'; }
+    else if(fairHomeSharp!=null){
+      fairHome=fairHomeSharp;
+      source=_so?`${_so.nBooks}-book consensus`:'DraftKings (de-vigged)';
+    }
+    if(fairHome!=null) fvPublish('mlb',{
+      id:'mlb:'+game.gamePk, league:'MLB', home:homeAbbr, away:awayAbbr,
+      start:gameTime?Date.parse(gameTime):null, fairHome, source,
+    });
+  })();
   const bet = _asks ? evaluateBet(modelHomeP, _asks, homeAbbr, awayAbbr) : null;
   const _isLive  = status==='Live' || status==='In Progress';
   const _isFinal = status==='Final';
@@ -2664,9 +2940,17 @@ function kalshiAsks(ev, homeAbbr, homeName, awayAbbr, awayName){
 // Evaluate the +EV side (if any) for one game.
 function evaluateBet(fairHome, asks, homeAbbr, awayAbbr){
   if(fairHome==null || !asks) return null;
+  // Shrink toward the Kalshi price before anything else. MARKET_EVIDENCE.MLBGAME
+  // carries w = 0, so this collapses to the market and no edge survives — which
+  // is the intended state until this market is measured the way F5 was.
+  const mktH=(()=>{
+    const dv=devigPower([asks.homeAsk,asks.awayAsk]);
+    return dv?dv[0]:null;
+  })();
+  const blended=blendFair(fairHome, mktH, MARKET_EVIDENCE.MLBGAME.w);
   const sides=[
-    {team:homeAbbr, fair:fairHome,   price:asks.homeAsk},
-    {team:awayAbbr, fair:1-fairHome, price:asks.awayAsk},
+    {team:homeAbbr, fair:blended,   raw:fairHome,   price:asks.homeAsk},
+    {team:awayAbbr, fair:1-blended, raw:1-fairHome, price:asks.awayAsk},
   ];
   let best=null;
   for(const s of sides){
@@ -3050,6 +3334,7 @@ async function init(){
   });
 
   BEST_BETS.length=0;   // reset before rendering populates it
+  fvClear('mlb');       // ditto, so yesterday's slate can't linger on the board
   sorted.forEach(g=>{
     try{
     const idx=mlbGames.indexOf(g);
@@ -3211,13 +3496,19 @@ function renderBestBets(container, hdr){
   }else{
     let rows='';
     for(const b of valuePlays.slice(0,6)){
+      // Show the claimed edge next to what survives shrinking to the price.
+      // The gap between the two IS the finding — almost all of the claimed
+      // number was the model refusing to update on a market that disagreed.
+      const shrunk=b.shrunk!=null
+        ?`<span class="bb-ok" title="Edge left after shrinking the model toward the de-vigged Kalshi price">${b.shrunk>0?'+':''}${(b.shrunk*100).toFixed(1)}&cent; after shrink</span>`:'';
+      const moved=b.movedAgainst?'<span class="bb-warn" title="Price has moved against this side since first sight today — that is information arriving, not value appearing">&#x26A0; moved against</span>':'';
       rows+=`<div class="bb-row"><span class="bb-mu">${b.matchup}</span>
         <span class="bb-pick">${b.pick||b.team}</span>
-        <span class="bb-edge bb-edge-muted">${(b.roi*100).toFixed(0)}% claimed</span></div>`;
+        <span class="bb-edge bb-edge-muted">${(b.roi*100).toFixed(0)}% claimed</span>${shrunk}${moved}</div>`;
     }
     card.innerHTML=`${title}
       ${rows}
-      <div class="bb-foot"><b>These are not recommendations.</b> Each row is where the F5 model disagrees with the Kalshi KXMLBF5 ask — tracked to measure whether the model has an edge, not to be bet. The live log below is the answer so far: over 38 graded flags the realized ROI was <b>negative</b>, and it got worse as the claimed edge got bigger — the signature of model error rather than market mispricing. Stake sizing was removed on purpose. Re-entry bar: flag rate under ~5% and a positive closing-line record over 100+ flags.</div>${staleNote}${roi}`;
+      <div class="bb-foot"><b>These are not recommendations — this market is closed for betting.</b> Measured 2026-08-09 over 120 graded games: the F5 model's log-loss is <b>1.0137</b> against <b>0.9889</b> for the Kalshi price and <b>0.9912</b> for simply quoting the base rate, so it is worse than knowing nothing. Closing-line value on 52 flagged plays was <b>&minus;0.87pp</b> (z = &minus;2.65 clustered by date, beat-rate 27%), and flags went <b>14&ndash;38</b> for &minus;25% ROI while claiming +7.7pp of edge and realising &minus;6.7pp. Rows keep accruing as paper so the closing-line record can settle it. Re-entry bar: a <b>positive</b> CLV mean over 100+ further flags. If it ever reopens, post resting limits rather than taking the ask — the taker fee at 50&cent; is 1.75&cent;, roughly 70% of the 2.5&cent; edge these flags require.</div>${staleNote}${roi}`;
   }
   hdr.insertAdjacentElement('afterend', card);
 }
@@ -3357,12 +3648,26 @@ function fmtLine(l){ return l>0?'+'+l:String(l); }
 function bestSpreadBet(model,g){
   if(!model||!g.spread) return null;
   const {pHome,pAway,pPush}=spreadProbs(model.mu,g.spread.home.line);
+  // A de-vigged spread price is ~0.50 on both sides, so blending toward it is
+  // just a temperature on the model's own confidence. w = 0.40 is the shrink
+  // measured on 214 backfilled games (optimal 0.37-0.45), which is why the
+  // spread survives as a bet at all while the moneyline mostly does not.
+  const dv=devigPower([mlToRawProb(g.spread.home.odds),mlToRawProb(g.spread.away.odds)]);
+  const live=1-pPush;
+  const W=MARKET_EVIDENCE.WNBASP.w;
+  const shrink=(p)=>{
+    if(live<=1e-9) return p;
+    const cond=Math.min(1-1e-6,Math.max(1e-6,p/live));       // P(cover | no push)
+    return _ilogit(W*_logit(cond)+(1-W)*_logit(dv?dv[0]:0.5))*live;
+  };
   const opts=[
-    {side:g.homeAbbr,line:g.spread.home.line,ml:g.spread.home.odds,p:pHome},
-    {side:g.awayAbbr,line:g.spread.away.line,ml:g.spread.away.odds,p:pAway},
-  ].map(o=>({...o,pPush,ev:betEV(o.p,pPush,o.ml)}));
+    {side:g.homeAbbr,key:'h',line:g.spread.home.line,ml:g.spread.home.odds,p:shrink(pHome),raw:pHome},
+    {side:g.awayAbbr,key:'a',line:g.spread.away.line,ml:g.spread.away.odds,p:live-shrink(pHome),raw:pAway},
+  ].map(o=>({...o,pPush,ev:betEV(o.p,pPush,o.ml),need:breakEvenAmerican(o.p/Math.max(live,1e-9))}));
   opts.sort((x,y)=>y.ev-x.ev);
-  return opts[0];
+  const best=opts[0];
+  if(!MARKET_EVIDENCE.WNBASP.bet) return {...best,blocked:true};
+  return best;
 }
 
 // Minimum probability-space edge, measured rather than guessed.
@@ -3380,15 +3685,25 @@ const MIN_PROB_EDGE = 0.04;
 function bestVegasBet(model,g){
   if(!model||!g.inlineOdds||g.inlineOdds.homeML==null) return null;
   // De-vigged market prob is the fair comparison for "does the model disagree
-  // with the market"; the raw price is what EV must be paid at.
+  // with the market"; the raw price is what EV must be paid at. Power de-vig,
+  // not proportional — proportional over-states the underdog, which is exactly
+  // where a payout-scaled EV number is already most likely to fool us.
   const rawH=mlToRawProb(g.inlineOdds.homeML), rawA=mlToRawProb(g.inlineOdds.awayML);
-  const tot=(rawH!=null&&rawA!=null)?(rawH+rawA):null;
+  const dv=devigPower([rawH,rawA]);
+  const mktH=dv?dv[0]:null, mktA=dv?dv[1]:null;
+  // Fair value = model shrunk toward the price. `raw` is kept for display so the
+  // card can still show what the model thinks on its own.
+  const fairH=blendFair(model.pHomeGame, mktH, MARKET_EVIDENCE.WNBAML.w);
   const sides=[
-    {side:g.homeAbbr,p:model.pHomeGame,ml:g.inlineOdds.homeML,mkt:tot?rawH/tot:null},
-    {side:g.awayAbbr,p:1-model.pHomeGame,ml:g.inlineOdds.awayML,mkt:tot?rawA/tot:null},
-  ].map(s=>({...s,ev:vegasEV(s.p,s.ml),edge:(s.mkt!=null?s.p-s.mkt:null)}));
+    {side:g.homeAbbr,key:'h',p:fairH,  raw:model.pHomeGame,  ml:g.inlineOdds.homeML,mkt:mktH},
+    {side:g.awayAbbr,key:'a',p:1-fairH,raw:1-model.pHomeGame,ml:g.inlineOdds.awayML,mkt:mktA},
+  ].map(s=>({...s,ev:vegasEV(s.p,s.ml),edge:(s.mkt!=null?s.p-s.mkt:null),
+             need:breakEvenAmerican(s.p)}));
   sides.sort((x,y)=>y.ev-x.ev);
   const best=sides[0];
+  if(!MARKET_EVIDENCE.WNBAML.bet) return {...best,blocked:true};
+  if(best.mkt!=null && marketDrift('wml:'+g.espnId+':'+best.key,best.mkt)>MOVE_VETO)
+    return {...best,movedAgainst:true};
   if(best.edge!=null && best.edge<MIN_PROB_EDGE) return {...best,belowEdgeFloor:true};
   return best;
 }
@@ -4190,6 +4505,7 @@ async function load(){
   }
   let html='';
   const plays=[];
+  fvClear('wnba');   // rebuild the board's WNBA rows from this render
   for(const g of games){
     const model=predictGame(g.homeAbbr,g.awayAbbr);
     const key=[g.homeAbbr,g.awayAbbr].sort().join('|');
@@ -4198,21 +4514,41 @@ async function load(){
     logPrediction(g,model,kGame,kQtrs);
     if(!g.isFinal&&!g.isLive){
       const mtc=`${g.awayAbbr}@${g.homeAbbr}`;
+      // Fair Value Board row — market only, no model. The spread's de-vigged
+      // price is near 50% by construction, which is exactly the useful fact:
+      // it says a -110 line is really about -103, so a soft book at -105 is a bet.
+      if(g.inlineOdds&&g.inlineOdds.homeML!=null){
+        const dv=devigPower([mlToRawProb(g.inlineOdds.homeML),mlToRawProb(g.inlineOdds.awayML)]);
+        const sp=(g.spread&&g.spread.home&&g.spread.home.odds!=null&&g.spread.away&&g.spread.away.odds!=null)
+          ? devigPower([mlToRawProb(g.spread.home.odds),mlToRawProb(g.spread.away.odds)]) : null;
+        if(dv) fvPublish('wnba',{
+          id:'wnba:'+g.espnId, league:'WNBA', home:g.homeAbbr, away:g.awayAbbr,
+          start:g.gameDate?Date.parse(g.gameDate):null,
+          fairHome:dv[0], source:'DraftKings (de-vigged)',
+          spreadLine:sp?g.spread.home.line:null, spreadFairHome:sp?sp[0]:null,
+        });
+      }
       const vBet=bestVegasBet(model,g);
-      if(vBet&&!vBet.belowEdgeFloor&&vBet.ev>=0.03)
+      if(vBet&&!vBet.blocked&&!vBet.movedAgainst&&!vBet.belowEdgeFloor&&vBet.ev>=0.03)
         plays.push({type:'ML',matchup:mtc,side:vBet.side,ml:vBet.ml,ev:vBet.ev,p:vBet.p,pPush:0,
+          gameId:g.espnId,need:vBet.need,
           label:`${vBet.side} ML ${fmtML(vBet.ml)}`,kelly:Math.min(0.05,vBet.ev/mlPayout(vBet.ml)/4)});
       // Spreads use a higher bar (4%): the margin distribution calibrates to
       // ~1 pt, worth ~3% of probability — comparable to the edge itself.
       const sBet=bestSpreadBet(model,g);
-      if(sBet&&sBet.ev>=0.04)
+      if(sBet&&!sBet.blocked&&sBet.ev>=0.04)
         plays.push({type:'SPREAD',matchup:mtc,side:sBet.side,ml:sBet.ml,ev:sBet.ev,p:sBet.p,pPush:sBet.pPush,
+          gameId:g.espnId,need:sBet.need,
           label:`${sBet.side} ${fmtLine(sBet.line)} (${fmtML(sBet.ml)})`,
           kelly:Math.min(0.05,sBet.ev/mlPayout(sBet.ml)/4)});
     }
     html+=renderGame(g,model,kGame,kQtrs);
   }
   plays.sort((x,y)=>y.ev-x.ev);
+  // ML and spread on the same game are one position, not two. Cap the stake
+  // per game and per day so a slate of correlated flags can't compound into a
+  // much larger bet than any single Kelly number ever authorised.
+  capExposure(plays, p=>p.kelly, p=>p.gameId);
   document.getElementById('wnba-games').innerHTML=renderBestBets(plays)+html;
   renderTrackBar();
   scheduleLiveRefresh(games);
@@ -4248,9 +4584,20 @@ function renderBestBets(plays){
     // underdogs — treat these as unproven, not as free money.
     const longshot=b.ml>=250
       ?'<span class="bb-warn" title="EV is payout-amplified at long odds and the model is unvalidated on heavy underdogs — unproven, size down">⚠ long odds</span>':'';
-    rows+=`<div class="bb-row"><span class="bb-mu">${b.matchup}</span>${tag}<span class="bb-pick">${b.label}</span><span class="bb-edge">+${(b.ev*100).toFixed(1)}% EV</span>${longshot}<span class="bb-ok">model ${wPct(b.p)}${push}</span><span class="bb-stake">${(b.kelly*100).toFixed(1)}% bankroll (¼-Kelly)</span></div>`;
+    // The number that actually travels: the worst price still +EV. Compare it
+    // to whatever a soft book (Fliff) is showing — that comparison needs no
+    // model to be right, only a sharper price to de-vig.
+    const need=b.need!=null?`<span class="bb-need" title="Worst price still +EV at this fair value — anything shorter is a pass">need ${fmtML(b.need)} or better</span>`:'';
+    // A play capped to zero is not a recommendation with no stake — it is a
+    // play there is no room for. Say that, rather than printing "0.0%".
+    const cap=(b.stakeCapped!=null&&b.stakeCapped<1e-4)
+      ?`<span class="bb-stake" style="opacity:.65" title="Exposure on this game or this day is already full — a higher-EV play took the room">no room (${(b.kelly*100).toFixed(1)}% wanted)</span>`
+      :(b.stakeCapped!=null&&b.stakeCapped<b.kelly-1e-6)
+      ?`<span class="bb-stake" title="Cut by the per-game / per-day correlated-exposure cap">${(b.stakeCapped*100).toFixed(1)}% <s style="opacity:.5">${(b.kelly*100).toFixed(1)}%</s></span>`
+      :`<span class="bb-stake">${((b.stakeCapped!=null?b.stakeCapped:b.kelly)*100).toFixed(1)}% bankroll (¼-Kelly)</span>`;
+    rows+=`<div class="bb-row"><span class="bb-mu">${b.matchup}</span>${tag}<span class="bb-pick">${b.label}</span><span class="bb-edge">+${(b.ev*100).toFixed(1)}% EV</span>${longshot}<span class="bb-ok">fair ${wPct(b.p)}${push}</span>${need}${cap}</div>`;
   }
-  return `<div class="best-bets"><div class="bb-title">🎯 WNBA Best Bets <span class="bb-count">${plays.length}</span> ${sub}</div>${rows}<div class="bb-foot">Play = model probability beats the price's implied probability after vig — ≥3% EV for moneylines, ≥4% for spreads (the margin distribution only calibrates to ~1 point, worth ~3% of probability, so spread edges carry more model risk). Whole-number spreads price the push explicitly. Stake = quarter-Kelly, capped at 5%. <b>⚠ long odds</b> means the payout amplifies EV — at +250 or longer, a few points of probability error looks like a huge edge, and the model was never validated on heavy underdogs; those flags are unproven, not free money. Treat all flags as experimental until the realized line below proves out. Not financial advice.</div>${roi}</div>`;
+  return `<div class="best-bets"><div class="bb-title">🎯 WNBA Best Bets <span class="bb-count">${plays.length}</span> ${sub}</div>${rows}<div class="bb-foot"><b>Fair value is the model shrunk toward the de-vigged price</b> (weight ${(MARKET_EVIDENCE.WNBAML.w*100).toFixed(0)}% model on moneylines, ${(MARKET_EVIDENCE.WNBASP.w*100).toFixed(0)}% on spreads), measured on 214 backfilled 2026 games — not the raw model, which would let a price moving against a pick read as a bigger edge. Bars: ≥3% EV moneyline, ≥4% spread, ≥${(MIN_PROB_EDGE*100).toFixed(0)}pp probability edge. Flags are dropped when the price has moved ≥${(MOVE_VETO*100).toFixed(0)}pp against them since first sight. Stake = quarter-Kelly, capped at ${(MAX_STAKE_GAME*100).toFixed(0)}% per game and ${(MAX_STAKE_DAY*100).toFixed(0)}% per day because ML and spread on one game are a single position. <b>"need X or better"</b> is the worst price still +EV — that is the number to take to a soft book. <b>⚠ long odds</b>: EV is payout-amplified at +250 or longer and the model is unvalidated on heavy underdogs. This market is <b>unproven, not proven</b> (β_model p=0.29); watch CLV, not P&L. Not financial advice.</div>${roi}</div>`;
 }
 
 return {load,toggleCard,exportLog};

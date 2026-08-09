@@ -265,6 +265,7 @@
     .bb-ok{color:var(--green);font-size:.7rem}
     .bb-warn{color:#fbbf24;font-size:.7rem;font-weight:700}
     .bb-stake{color:var(--dim);font-size:.74rem;margin-left:auto}
+    .bb-need{color:#7dd3fc;font-size:.72rem;font-weight:600;white-space:nowrap}
     .bb-foot{font-size:.66rem;color:var(--dim2);margin-top:8px;line-height:1.4}
 
     .no-games{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:40px;text-align:center;color:var(--dim)}
@@ -1053,15 +1054,103 @@ function spreadProbs(mu, homeLine){
 // EV per $1 with push refunding the stake
 function betEV(p,pPush,ml){ return p*mlPayout(ml)-(1-p-pPush); }
 function fmtLine(l){ return l>0?'+'+l:String(l); }
+
+/* ═══ MARKET DISCIPLINE ══════════════════════════════════════════════════
+   Measured 2026-08-09 — wnba_model/wnba_backfill.py, 214 backfilled 2026
+   games against DraftKings CLOSING lines. Keep in sync with index.html.
+
+   The benchmark is the de-vigged market price, not the base rate. A 67%
+   model against a 57% base rate is still worthless to bet if the price is
+   68%. Corrections applied to every value number below:
+
+   1. SHRINK TO MARKET. Fair value is a logit pool of model and price. The
+      raw model holds its own probability fixed while the price moves, so a
+      market moving AGAINST a pick makes that side cheaper and the displayed
+      edge GROWS — the engine selects for its own errors.
+   2. MOVED-AGAINST VETO. A price drifting away from a pick is information
+      arriving. Kill the flag rather than upgrade it.
+   3. CORRELATED EXPOSURE. ML and spread on one game are a single underlying
+      result, so stake is capped per game and per day. */
+const MARKET_EVIDENCE = {
+  WNBAML: {bet:true, w:0.15, why:'Unproven, not refuted. β_model +0.35 (p=0.29) with a lookahead injury feature, +0.07 (p=0.87) without. Live sits between, so w is set near the honest end.'},
+  WNBASP: {bet:true, w:0.40, why:'Best segment measured: model ATS 56.5% vs 52.4% break-even (p=0.095), optimal shrink 0.37–0.45.'},
+};
+function _logit(p){ p=Math.min(1-1e-6,Math.max(1e-6,p)); return Math.log(p/(1-p)); }
+function _ilogit(z){ return 1/(1+Math.exp(-Math.max(-30,Math.min(30,z)))); }
+function blendFair(pModel,pMarket,w){
+  if(pModel==null) return pMarket;
+  if(pMarket==null) return pModel;
+  return _ilogit(w*_logit(pModel)+(1-w)*_logit(pMarket));
+}
+// Power de-vig: solve Σ qᵢ^k = 1. Proportional de-vig over-states the underdog,
+// which is exactly where a payout-scaled EV number already flatters itself.
+function devigPower(raw){
+  if(!raw||raw.some(x=>x==null||!(x>0))) return null;
+  const s=raw.reduce((a,b)=>a+b,0);
+  if(s<=1) return raw.map(x=>x/s);
+  let lo=0.5,hi=5;
+  for(let i=0;i<100;i++){
+    const k=(lo+hi)/2;
+    if(raw.reduce((a,b)=>a+Math.pow(b,k),0)>1) lo=k; else hi=k;
+  }
+  const k=(lo+hi)/2;
+  return raw.map(x=>Math.pow(x,k));
+}
+const MOVE_VETO=0.02;
+let _MKT_SEEN=(()=>{ try{ return JSON.parse(localStorage.getItem('mkt_first_seen_v1')||'{}'); }catch(e){ return {}; } })();
+function marketDrift(key,pNow){
+  if(key==null||pNow==null) return 0;
+  const today=new Date().toISOString().slice(0,10);
+  const rec=_MKT_SEEN[key];
+  if(!rec||rec.d!==today){
+    for(const k in _MKT_SEEN) if(_MKT_SEEN[k].d!==today) delete _MKT_SEEN[k];
+    _MKT_SEEN[key]={d:today,p:pNow};
+    try{ localStorage.setItem('mkt_first_seen_v1',JSON.stringify(_MKT_SEEN)); }catch(e){}
+    return 0;
+  }
+  return rec.p-pNow;      // >0 ⇒ this side got cheaper ⇒ market moved against it
+}
+const MAX_STAKE_GAME=0.02, MAX_STAKE_DAY=0.06;
+function capExposure(plays,stakeOf,gameOf){
+  let day=0; const perGame={};
+  for(const p of plays){
+    const g=gameOf(p), want=stakeOf(p);
+    const room=Math.min(MAX_STAKE_GAME-(perGame[g]||0), MAX_STAKE_DAY-day, want);
+    p.stakeCapped=Math.max(0,room);
+    perGame[g]=(perGame[g]||0)+p.stakeCapped; day+=p.stakeCapped;
+  }
+  return plays;
+}
+// The worst American price still +EV. This is the number that actually makes
+// money: it needs no model to be right, only a sharper price to de-vig, and it
+// is what you carry to a soft book.
+function breakEvenAmerican(p){
+  if(p==null||p<=0||p>=1) return null;
+  return p>=0.5 ? -Math.round(100*p/(1-p)) : Math.round(100*(1-p)/p);
+}
+
 function bestSpreadBet(model,g){
   if(!model||!g.spread) return null;
   const {pHome,pAway,pPush}=spreadProbs(model.mu, g.spread.home.line);
+  // A de-vigged spread price is ~0.50 both sides, so blending toward it is a
+  // temperature on the model's own confidence. w = 0.40 is the shrink measured
+  // on 214 backfilled games (optimal 0.37–0.45).
+  const dv=devigPower([mlToRawProb(g.spread.home.odds),mlToRawProb(g.spread.away.odds)]);
+  const live=1-pPush;
+  const W=MARKET_EVIDENCE.WNBASP.w;
+  const shrink=(p)=>{
+    if(live<=1e-9) return p;
+    const cond=Math.min(1-1e-6,Math.max(1e-6,p/live));
+    return _ilogit(W*_logit(cond)+(1-W)*_logit(dv?dv[0]:0.5))*live;
+  };
   const opts=[
-    {side:g.homeAbbr,line:g.spread.home.line,ml:g.spread.home.odds,p:pHome},
-    {side:g.awayAbbr,line:g.spread.away.line,ml:g.spread.away.odds,p:pAway},
-  ].map(o=>({...o,pPush,ev:betEV(o.p,pPush,o.ml)}));
+    {side:g.homeAbbr,key:'h',line:g.spread.home.line,ml:g.spread.home.odds,p:shrink(pHome),raw:pHome},
+    {side:g.awayAbbr,key:'a',line:g.spread.away.line,ml:g.spread.away.odds,p:live-shrink(pHome),raw:pAway},
+  ].map(o=>({...o,pPush,ev:betEV(o.p,pPush,o.ml),need:breakEvenAmerican(o.p/Math.max(live,1e-9))}));
   opts.sort((x,y)=>y.ev-x.ev);
-  return opts[0];
+  const best=opts[0];
+  if(!MARKET_EVIDENCE.WNBASP.bet) return {...best,blocked:true};
+  return best;
 }
 
 // Minimum probability-space edge, measured rather than guessed.
@@ -1078,13 +1167,21 @@ function bestVegasBet(model,g){
   // De-vigged market probability is the fair comparison for "does the model
   // disagree with the market", while the raw price is what EV must be paid at.
   const rawH=mlToRawProb(g.inlineOdds.homeML), rawA=mlToRawProb(g.inlineOdds.awayML);
-  const tot=(rawH!=null&&rawA!=null)?(rawH+rawA):null;
+  const dv=devigPower([rawH,rawA]);
+  const mktH=dv?dv[0]:null, mktA=dv?dv[1]:null;
+  // Fair value = model shrunk toward the de-vigged price. `raw` is kept so the
+  // card can still show what the model thinks on its own.
+  const fairH=blendFair(model.pHomeGame, mktH, MARKET_EVIDENCE.WNBAML.w);
   const sides=[
-    {side:g.homeAbbr, p:model.pHomeGame,   ml:g.inlineOdds.homeML, mkt:tot?rawH/tot:null},
-    {side:g.awayAbbr, p:1-model.pHomeGame, ml:g.inlineOdds.awayML, mkt:tot?rawA/tot:null},
-  ].map(s=>({...s, ev:vegasEV(s.p,s.ml), edge:(s.mkt!=null?s.p-s.mkt:null)}));
+    {side:g.homeAbbr, key:'h', p:fairH,   raw:model.pHomeGame,   ml:g.inlineOdds.homeML, mkt:mktH},
+    {side:g.awayAbbr, key:'a', p:1-fairH, raw:1-model.pHomeGame, ml:g.inlineOdds.awayML, mkt:mktA},
+  ].map(s=>({...s, ev:vegasEV(s.p,s.ml), edge:(s.mkt!=null?s.p-s.mkt:null),
+             need:breakEvenAmerican(s.p)}));
   sides.sort((x,y)=>y.ev-x.ev);
   const best=sides[0];
+  if(!MARKET_EVIDENCE.WNBAML.bet) return {...best, blocked:true};
+  if(best.mkt!=null && marketDrift('wml:'+g.espnId+':'+best.key,best.mkt)>MOVE_VETO)
+    return {...best, movedAgainst:true};
   // Thin edges dressed up by a big payout are the failure mode; require the
   // model to actually disagree with the market by more than calibration noise.
   if(best.edge!=null && best.edge<MIN_PROB_EDGE) return {...best, belowEdgeFloor:true};
@@ -1438,20 +1535,24 @@ async function init(){
     if(!g.isFinal&&!g.isLive){
       const mu=`${g.awayAbbr}@${g.homeAbbr}`;
       const vBet=bestVegasBet(model,g);
-      if(vBet&&!vBet.belowEdgeFloor&&vBet.ev>=0.03)
+      if(vBet&&!vBet.blocked&&!vBet.movedAgainst&&!vBet.belowEdgeFloor&&vBet.ev>=0.03)
         plays.push({type:'ML', matchup:mu, side:vBet.side, ml:vBet.ml, ev:vBet.ev, p:vBet.p,
+          gameId:g.espnId, need:vBet.need,
           label:`${vBet.side} ML ${fmtML(vBet.ml)}`, kelly:Math.min(0.05,vBet.ev/mlPayout(vBet.ml)/4)});
       // Spreads use a higher bar (4%): the margin distribution calibrates to
       // ~1 pt, which is ~3% of probability — comparable to the edge itself.
       const sBet=bestSpreadBet(model,g);
-      if(sBet&&sBet.ev>=0.04)
+      if(sBet&&!sBet.blocked&&sBet.ev>=0.04)
         plays.push({type:'SPREAD', matchup:mu, side:sBet.side, ml:sBet.ml, ev:sBet.ev, p:sBet.p,
+          gameId:g.espnId, need:sBet.need, pPush:sBet.pPush,
           label:`${sBet.side} ${fmtLine(sBet.line)} (${fmtML(sBet.ml)})`,
           kelly:Math.min(0.05,sBet.ev/mlPayout(sBet.ml)/4)});
     }
     html+=renderGame(g,model,kGame,kQtrs);
   }
   plays.sort((x,y)=>y.ev-x.ev);
+  // ML and spread on the same game are one position, not two.
+  capExposure(plays, p=>p.kelly, p=>p.gameId);
   document.getElementById('games').innerHTML=renderBestBets(plays)+html;
   renderTrackBar();
   scheduleLiveRefresh(games);
@@ -1488,9 +1589,20 @@ function renderBestBets(plays){
     const longshot=b.ml>=250
       ?'<span class="bb-warn" title="EV is payout-amplified at long odds and the model is unvalidated on heavy underdogs — unproven, size down">⚠ long odds</span>':'';
     const push=b.pPush>0.005?` <span class="qt-sub" style="display:inline">push ${fmtPct(b.pPush)}</span>`:'';
-    rows+=`<div class="bb-row"><span class="bb-mu">${b.matchup}</span>${tag}<span class="bb-pick">${b.label}</span><span class="bb-edge">+${(b.ev*100).toFixed(1)}% EV</span>${longshot}<span class="bb-ok">model ${fmtPct(b.p)}${push}</span><span class="bb-stake">${(b.kelly*100).toFixed(1)}% bankroll (¼-Kelly)</span></div>`;
+    // The number that actually travels: the worst price still +EV. Compare it
+    // to whatever a soft book (Fliff) shows — that comparison needs no model to
+    // be right, only a sharper price to de-vig.
+    const need=b.need!=null?`<span class="bb-need" title="Worst price still +EV at this fair value — anything shorter is a pass">need ${fmtML(b.need)} or better</span>`:'';
+    // A play capped to zero is not a recommendation with no stake — it is a
+    // play there is no room for. Say that, rather than printing "0.0%".
+    const cap=(b.stakeCapped!=null&&b.stakeCapped<1e-4)
+      ?`<span class="bb-stake" style="opacity:.65" title="Exposure on this game or this day is already full — a higher-EV play took the room">no room (${(b.kelly*100).toFixed(1)}% wanted)</span>`
+      :(b.stakeCapped!=null&&b.stakeCapped<b.kelly-1e-6)
+      ?`<span class="bb-stake" title="Cut by the per-game / per-day correlated-exposure cap">${(b.stakeCapped*100).toFixed(1)}% <s style="opacity:.5">${(b.kelly*100).toFixed(1)}%</s></span>`
+      :`<span class="bb-stake">${((b.stakeCapped!=null?b.stakeCapped:b.kelly)*100).toFixed(1)}% bankroll (¼-Kelly)</span>`;
+    rows+=`<div class="bb-row"><span class="bb-mu">${b.matchup}</span>${tag}<span class="bb-pick">${b.label}</span><span class="bb-edge">+${(b.ev*100).toFixed(1)}% EV</span>${longshot}<span class="bb-ok">fair ${fmtPct(b.p)}${push}</span>${need}${cap}</div>`;
   }
-  return `<div class="best-bets"><div class="bb-title">🎯 WNBA Best Bets <span class="bb-count">${plays.length}</span> ${sub}</div>${rows}<div class="bb-foot">Play = model probability beats the price's implied probability after vig — ≥3% EV for moneylines, ≥4% for spreads (the margin distribution only calibrates to ~1 point, which is worth ~3% of probability, so spread edges carry more model risk). Whole-number spreads price the push explicitly. Stake = quarter-Kelly, capped at 5%. <b>⚠ long odds</b> means the payout amplifies EV — at +250 or longer, a few points of probability error looks like a huge edge, and the model was never validated on heavy underdogs; those flags are unproven, not free money. Treat all flags as experimental until the realized line below proves out. Not financial advice.</div>${roi}</div>`;
+  return `<div class="best-bets"><div class="bb-title">🎯 WNBA Best Bets <span class="bb-count">${plays.length}</span> ${sub}</div>${rows}<div class="bb-foot"><b>Fair value is the model shrunk toward the de-vigged price</b> (weight ${(MARKET_EVIDENCE.WNBAML.w*100).toFixed(0)}% model on moneylines, ${(MARKET_EVIDENCE.WNBASP.w*100).toFixed(0)}% on spreads), measured on 214 backfilled 2026 games — not the raw model, which would let a price moving against a pick read as a bigger edge. Bars: ≥3% EV moneyline, ≥4% spread, ≥${(MIN_PROB_EDGE*100).toFixed(0)}pp probability edge. Flags are dropped when the price has moved ≥${(MOVE_VETO*100).toFixed(0)}pp against them since first sight. Stake = quarter-Kelly, capped at ${(MAX_STAKE_GAME*100).toFixed(0)}% per game and ${(MAX_STAKE_DAY*100).toFixed(0)}% per day because ML and spread on one game are a single position. <b>"need X or better"</b> is the worst price still +EV — that is the number to take to a soft book. <b>⚠ long odds</b>: EV is payout-amplified at +250 or longer and the model is unvalidated on heavy underdogs. This market is <b>unproven, not proven</b> (β_model p=0.29); watch CLV, not P&L. Not financial advice.</div>${roi}</div>`;
 }
 
 init();

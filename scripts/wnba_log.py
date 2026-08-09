@@ -427,11 +427,23 @@ def main():
             if not e:
                 continue
             key = "|".join(sorted([g["home"], g["away"]]))
+            # Quarter prices were being fetched here and thrown away, which is why
+            # `kalshi.q` is null on every logged game and the quarter market — the
+            # thinnest one, and the likeliest place an edge survives — could never
+            # be tested. Kalshi only opens quarter markets on a subset of games and
+            # opens them LATER than the game market, so the pregame write usually
+            # misses them; this closing pass is where they actually exist.
+            qs = [kalshi_probs(q.get(key), g["home"], g["away"], True) for q in kq2]
             e["closing"] = {
                 "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "vegas": g["vegas"], "spread": g["spread"],
                 "kalshi": kalshi_probs(kg2.get(key), g["home"], g["away"], False),
+                "kalshiQ": qs,
             }
+            # Backfill the pregame slot too, so a game whose quarter markets opened
+            # after the first write still has a usable pregame quarter price.
+            if any(qs) and not any((e.get("kalshi") or {}).get("q") or []):
+                e.setdefault("kalshi", {})["q"] = qs
         print(f"  closing-line refreshed for {len(still_pregame)} pregame games")
 
     # ── GRADE ──
