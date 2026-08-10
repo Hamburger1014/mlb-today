@@ -164,6 +164,16 @@
     .fv-chip:hover{color:var(--fg)}
     .fv-chip.on{background:#3a8ae8;border-color:#3a8ae8;color:#fff}
     .fv-chip-n{opacity:.65;font-weight:400}
+    .fv-log{width:2rem;text-align:right}
+    .fv-log .fv-chip{padding:1px 8px;font-size:.8rem;line-height:1.2}
+    .fv-formrow td{background:rgba(58,138,232,.08);padding:8px 10px}
+    .fv-form-lbl{font-size:.66rem;color:var(--dim2);margin:0 6px 0 0;text-transform:uppercase;letter-spacing:.04em}
+    .fv-inp{background:var(--bg);border:1px solid var(--line);color:var(--fg);border-radius:6px;
+      padding:4px 8px;width:5.5rem;font-family:inherit;font-size:.78rem;margin-right:10px}
+    .fv-inp-sm{width:3.2rem}
+    .fv-ledger{border-bottom:1px solid var(--line);margin-bottom:6px}
+    .fv-ledger-kpis{display:flex;flex-wrap:wrap;gap:14px;padding:2px 18px 10px;font-size:.72rem;color:var(--dim)}
+    .fv-ledger-kpis b{color:var(--fg);font-size:.86rem}
     .fv-tbl tr.fv-sp td{padding-top:0;font-size:.76rem;opacity:.85}
     @media(max-width:580px){
       .fv-tbl{font-size:.76rem}
@@ -707,6 +717,7 @@ function switchView(v){
     // fetches football itself — those leagues have no view and don't need one.
     if(!wnbaLoaded){ wnbaLoaded=true; Promise.resolve(WNBA.load()).then(renderFairValue).catch(()=>{}); }
     fvFetchFootball().then(renderFairValue).catch(()=>{});
+    fvGradeBets().then(ch=>{ if(ch) renderFairValue(); }).catch(()=>{});
     renderFairValue();
   }
   else if(v==='mlb' && !_liveTimer && document.querySelector('#games-container .game-card')) startLiveScorePolling();
@@ -771,7 +782,7 @@ async function fvFetchFootball(force){
         const tDv=(ovO!=null&&unO!=null)?devigPower([mlToRawProb(ovO),mlToRawProb(unO)]):null;
         if(!dv && !spDv && !tDv) continue;
         fvPublish(key,{
-          id:key+':'+ev.id, league:cfg.label,
+          id:key+':'+ev.id, gameId:ev.id, idSrc:'espn', league:cfg.label,
           home:home.team?.abbreviation||'HOME', away:away.team?.abbreviation||'AWAY',
           start:ev.date?Date.parse(ev.date):null,
           fairHome:dv?dv[0]:null, source:(o.provider?.name||'Book')+' (de-vigged)',
@@ -790,6 +801,153 @@ async function _fvScoreboard(url){
 }
 let FV_FILTER='all';
 function fvSetFilter(v){ FV_FILTER=v; renderFairValue(); }
+
+// ═══════════════════════════════════════════════════════════════
+//  FV BET LEDGER
+//  Every model on this page was killed by a log that could prove it wrong.
+//  The board produces equally confident numbers, so it gets held to the same
+//  standard: what you ACTUALLY bet, at the price you ACTUALLY got.
+//
+//  The headline metric is not win rate. It is PRICE IMPROVEMENT — the gap in
+//  probability points between the board's fair value and the price you took.
+//  If the de-vigged fair is right, positive improvement is +EV by construction,
+//  and it reads in weeks because it does not wait on outcomes. Realised P&L is
+//  the lagging confirmation, exactly as CLV is to ROI for the models.
+// ═══════════════════════════════════════════════════════════════
+const FV_BETS_KEY='fv_bets_v1';
+let FV_BETS=(()=>{ try{ return JSON.parse(localStorage.getItem(FV_BETS_KEY)||'[]'); }catch(e){ return []; } })();
+let FV_LEGS={};          // render-time index so a row can hand its leg to the form
+let FV_FORM=null;        // which leg key currently has the log form open
+function fvBetsSave(){ try{ localStorage.setItem(FV_BETS_KEY,JSON.stringify(FV_BETS)); }catch(e){} }
+function fvOpenForm(k){ FV_FORM=(FV_FORM===k?null:k); renderFairValue(); }
+function fvSubmitBet(k){
+  const leg=FV_LEGS[k]; if(!leg) return;
+  const got=parseFloat((document.getElementById('fv-got-'+k)||{}).value);
+  const stake=parseFloat((document.getElementById('fv-stk-'+k)||{}).value);
+  if(isNaN(got)||got===0||Math.abs(got)<100){ alert('Enter the American price you actually got (e.g. -105 or +120).'); return; }
+  FV_BETS.push({
+    id:leg.rowId+'|'+leg.market+'|'+leg.side+'|'+Date.now(),
+    league:leg.league, gameId:leg.gameId, idSrc:leg.idSrc, matchup:leg.matchup,
+    market:leg.market, side:leg.side, sideIsHome:leg.sideIsHome??null, line:leg.line??null,
+    fairP:leg.p, need:breakEvenAmerican(leg.p), got,
+    stake:(isNaN(stake)||stake<=0)?1:stake,
+    start:leg.start||null, placedAt:new Date().toISOString(), result:null,
+  });
+  fvBetsSave(); FV_FORM=null; renderFairValue();
+}
+function fvDeleteBet(id){
+  const i=FV_BETS.findIndex(b=>b.id===id);
+  if(i>=0 && confirm('Remove this bet from the ledger?')){ FV_BETS.splice(i,1); fvBetsSave(); renderFairValue(); }
+}
+// Price improvement in probability points: fair − what the taken price implies.
+// Positive ⇒ you were paid more than the market's own fair value.
+function fvImprovement(b){
+  if(b.got==null||b.fairP==null) return null;
+  return b.fairP - mlToRawProb(b.got);
+}
+function fvPayout(ml){ return ml>0?ml/100:100/Math.abs(ml); }
+
+const FV_LEAGUE_PATH={CFB:'football/college-football',NFL:'football/nfl',WNBA:'basketball/wnba'};
+async function fvGradeBets(){
+  const pend=FV_BETS.filter(b=>!b.result && b.start && Date.now()>b.start+3*3600e3);
+  if(!pend.length) return false;
+  let changed=false;
+  // MLB ids are statsapi gamePks, everything else is an ESPN event id — grade
+  // each against the source that actually issued the id.
+  const espn=pend.filter(b=>b.idSrc==='espn'), mlb=pend.filter(b=>b.idSrc==='statsapi');
+  const byDate={};
+  for(const b of espn){
+    const ymd=new Date(b.start).toISOString().slice(0,10).replace(/-/g,'');
+    (byDate[b.league+'|'+ymd]=byDate[b.league+'|'+ymd]||[]).push(b);
+  }
+  for(const key of Object.keys(byDate)){
+    const [lg,ymd]=key.split('|'); const path=FV_LEAGUE_PATH[lg]; if(!path) continue;
+    try{
+      const d=await espnFetch(`https://site.api.espn.com/apis/site/v2/sports/${path}/scoreboard?dates=${ymd}&limit=200`);
+      for(const ev of (d.events||[])){
+        const c=(ev.competitions||[])[0]; if(!c) continue;
+        if((c.status?.type?.name||'')!=='STATUS_FINAL') continue;
+        const h=(c.competitors||[]).find(t=>t.homeAway==='home');
+        const a=(c.competitors||[]).find(t=>t.homeAway==='away');
+        if(!h||!a) continue;
+        for(const b of byDate[key]) if(String(b.gameId)===String(ev.id)){
+          if(fvSettle(b,+h.score,+a.score,h.team?.abbreviation,a.team?.abbreviation)) changed=true;
+        }
+      }
+    }catch(e){}
+  }
+  for(const b of mlb){
+    try{
+      const ymd=new Date(b.start).toISOString().slice(0,10);
+      const d=await mlbFetch(`/schedule?sportId=1&date=${ymd}`);   // mlbFetch prepends MLB_BASE
+      for(const day of (d.dates||[])) for(const g of (day.games||[])){
+        if(String(g.gamePk)!==String(b.gameId)) continue;
+        if((g.status?.abstractGameState||'')!=='Final') continue;
+        const hs=g.teams?.home?.score, as=g.teams?.away?.score;
+        if(hs==null||as==null) continue;
+        if(fvSettle(b,hs,as,g.teams.home.team?.abbreviation,g.teams.away.team?.abbreviation)) changed=true;
+      }
+    }catch(e){}
+  }
+  if(changed) fvBetsSave();
+  return changed;
+}
+// The board only ever offers three leg shapes, so settlement stays explicit.
+// Which side was bet is recorded as `sideIsHome` at log time rather than
+// re-derived from abbreviations at grading time: statsapi's /schedule returns
+// only {id, name, link} for a team, so the abbreviation is undefined there and
+// `b.side === hAb` silently graded every MLB home moneyline backwards.
+function fvSettle(b,hs,as,hAb,aAb){
+  if(b.result) return false;
+  let won=null, push=false;
+  if(b.market==='ML'){
+    const isHome = (b.sideIsHome!=null) ? b.sideIsHome
+                 : (hAb!=null ? b.side===hAb : null);
+    if(isHome===null) return false;               // unresolvable — leave pending
+    if(hs===as) push=true;                        // rare, but do not guess
+    else won = isHome ? hs>as : as>hs;
+  }else if(b.market==='SPREAD'){
+    const m=(hs-as)+(b.line||0);                  // line is always the HOME line
+    if(Math.abs(m)<1e-9) push=true; else won=m>0;
+  }else if(b.market==='TOTAL'){
+    const t=hs+as;
+    if(t===b.line) push=true; else won=t>b.line;  // board only offers the over
+  }
+  if(won===null && !push) return false;
+  b.result={won:!!won, push, hs, as, gradedAt:new Date().toISOString()};
+  return true;
+}
+function fvLedgerHtml(){
+  if(!FV_BETS.length) return '';
+  const graded=FV_BETS.filter(b=>b.result && !b.result.push);
+  const w=graded.filter(b=>b.result.won).length, l=graded.length-w;
+  const staked=graded.reduce((s,b)=>s+b.stake,0);
+  const profit=graded.reduce((s,b)=>s+(b.result.won?b.stake*fvPayout(b.got):-b.stake),0);
+  const imps=FV_BETS.map(fvImprovement).filter(v=>v!=null);
+  const avgImp=imps.length?imps.reduce((a,c)=>a+c,0)/imps.length:null;
+  const beat=imps.length?imps.filter(v=>v>0).length/imps.length:null;
+  const roi=staked>0?profit/staked:null;
+  let rows='';
+  for(const b of [...FV_BETS].sort((x,y)=>(y.start||0)-(x.start||0)).slice(0,12)){
+    const imp=fvImprovement(b);
+    const st=b.result?(b.result.push?'push':(b.result.won?'✅':'❌')):'<span style="opacity:.6">pending</span>';
+    rows+=`<tr><td class="fv-side">${esc(b.matchup)}</td>`
+      +`<td class="fv-side">${esc(b.market==='TOTAL'?('over '+b.line):(b.side+(b.line!=null&&b.market==='SPREAD'?' '+fvLine(b.line):'')))}</td>`
+      +`<td class="fv-fair">${fvAmer(b.need)}</td><td class="fv-need">${fvAmer(b.got)}</td>`
+      +`<td class="fv-fair" style="color:${imp>0?'#34d399':'#f87171'}">${imp==null?'—':(imp>0?'+':'')+(imp*100).toFixed(1)}pp</td>`
+      +`<td class="fv-side">${st}</td>`
+      +`<td><button class="fv-chip" style="padding:1px 7px;font-size:.64rem" onclick="fvDeleteBet('${esc(b.id)}')">✕</button></td></tr>`;
+  }
+  return '<div class="fv-ledger"><div class="bb-title" style="padding:10px 18px 4px">🧾 Bets taken <span class="bb-count">'+FV_BETS.length+'</span></div>'
+    +'<div class="fv-ledger-kpis">'
+    +`<span><b>${avgImp==null?'—':(avgImp>0?'+':'')+(avgImp*100).toFixed(2)+'pp'}</b> avg price improvement</span>`
+    +`<span><b>${beat==null?'—':(beat*100).toFixed(0)+'%'}</b> beat the need price</span>`
+    +`<span><b>${graded.length?w+'–'+l:'—'}</b> settled</span>`
+    +`<span><b>${roi==null?'—':(roi>=0?'+':'')+(roi*100).toFixed(1)+'%'}</b> realised ROI</span>`
+    +'</div>'
+    +'<table class="fv-tbl"><thead><tr><th>Game</th><th>Bet</th><th>Need</th><th>Got</th><th>Edge</th><th></th><th></th></tr></thead><tbody>'+rows+'</tbody></table>'
+    +'<div class="bb-foot" style="padding:8px 18px"><b>Avg price improvement is the number to watch.</b> It is the gap between the board\'s fair value and the price you actually took, and if the fair value is right it is +EV by construction — so it reads in weeks instead of waiting on a season of outcomes. Realised ROI is the lagging confirmation. Same relationship CLV has to ROI for the models, and the same reason the models were settled by CLV rather than by P&L.</div></div>';
+}
 function fvPublish(league,row){
   const a=FV_ROWS[league]; if(!a) return;
   const i=a.findIndex(r=>r.id===row.id);
@@ -804,8 +962,10 @@ function renderFairValue(){
   for(const r of all) counts[r.league]=(counts[r.league]||0)+1;
   const rows=FV_FILTER==='all'?all:all.filter(r=>r.league===FV_FILTER);
   const status=document.getElementById('fv-status'), board=document.getElementById('fv-board');
+  FV_LEGS={};   // rebuilt every render; keys must match what the buttons emit
   if(!all.length){
-    status.style.display=''; board.innerHTML='';
+    status.style.display=''; board.innerHTML=fvLedgerHtml();
+    status.style.display=FV_BETS.length?'none':'';
     status.textContent='No priced games yet — open MLB or WNBA once so prices load, then come back.';
     return;
   }
@@ -829,7 +989,7 @@ function renderFairValue(){
       +`${bad?'&#x26A0;&#xFE0F;':'&#x1F551;'} Kalshi rows are priced off a <b>${ageMin}-min-old</b> snapshot, not a live quote`
       +`${bad?' — too old to act on. Refresh, or price these from a live source.':'.'}</div>`;
   }
-  let html=chips+fresh+'<table class="fv-tbl"><thead><tr><th>Game</th><th>Side</th><th>Fair</th><th>Need</th><th>Source</th></tr></thead><tbody>';
+  let html=fvLedgerHtml()+chips+fresh+'<table class="fv-tbl"><thead><tr><th>Game</th><th>Side</th><th>Fair</th><th>Need</th><th>Source</th><th></th></tr></thead><tbody>';
   for(const r of rows){
     const d=r.start?new Date(r.start):null;
     // Football slates run days out, so a bare clock time is ambiguous there.
@@ -841,22 +1001,40 @@ function renderFairValue(){
     // WNBA carry a moneyline and sometimes nothing else.
     const legs=[];
     if(r.fairHome!=null){
-      legs.push({label:r.away, p:1-r.fairHome});
-      legs.push({label:r.home, p:r.fairHome});
+      legs.push({label:r.away, p:1-r.fairHome, market:'ML', side:r.away, sideIsHome:false});
+      legs.push({label:r.home, p:r.fairHome,   market:'ML', side:r.home, sideIsHome:true});
     }
     if(r.spreadLine!=null && r.spreadFairHome!=null)
-      legs.push({label:`spread ${fvLine(r.spreadLine)} ${r.home}`, p:r.spreadFairHome, sub:true});
+      legs.push({label:`spread ${fvLine(r.spreadLine)} ${r.home}`, p:r.spreadFairHome, sub:true,
+                 market:'SPREAD', side:r.home, sideIsHome:true, line:r.spreadLine});
     if(r.totalLine!=null && r.totalFairOver!=null)
-      legs.push({label:`over ${r.totalLine}`, p:r.totalFairOver, sub:true});
+      legs.push({label:`over ${r.totalLine}`, p:r.totalFairOver, sub:true,
+                 market:'TOTAL', side:'over', sideIsHome:null, line:r.totalLine});
     if(!legs.length) continue;
     legs.forEach((leg,i)=>{
+      const k=(r.id+'-'+i).replace(/[^A-Za-z0-9_-]/g,'_');
+      FV_LEGS[k]={...leg, rowId:r.id, gameId:r.gameId, idSrc:r.idSrc,
+                  league:r.league, matchup:`${r.away}@${r.home}`, start:r.start};
+      const need=breakEvenAmerican(leg.p);
       html+=`<tr class="${i===0?'fv-first':(leg.sub?'fv-sp':'')}">`
         +(i===0?`<td rowspan="${legs.length}" class="fv-game"><b>${esc(r.away)}@${esc(r.home)}</b><span class="fv-meta">${esc(r.league)} · ${t}</span></td>`:'')
         +`<td class="fv-side">${esc(leg.label)}</td>`
         +`<td class="fv-fair">${(leg.p*100).toFixed(1)}%</td>`
-        +`<td class="fv-need">${fvAmer(breakEvenAmerican(leg.p))}</td>`
+        +`<td class="fv-need">${fvAmer(need)}</td>`
         +(i===0?`<td rowspan="${legs.length}" class="fv-src">${esc(r.source)}</td>`:'')
+        +`<td class="fv-log"><button class="fv-chip" title="Log a bet you actually placed on this" onclick="fvOpenForm('${k}')">${FV_FORM===k?'×':'+'}</button></td>`
         +'</tr>';
+      if(FV_FORM===k){
+        // Pre-filled with the need price so the common case is one tap, but it
+        // is the price you ACTUALLY got that matters — that gap is the metric.
+        html+=`<tr class="fv-formrow"><td></td><td colspan="5">`
+          +`<span class="fv-form-lbl">price you got</span>`
+          +`<input id="fv-got-${k}" class="fv-inp" type="text" inputmode="text" value="${fvAmer(need)}">`
+          +`<span class="fv-form-lbl">units</span>`
+          +`<input id="fv-stk-${k}" class="fv-inp fv-inp-sm" type="text" inputmode="decimal" value="1">`
+          +`<button class="fv-chip on" onclick="fvSubmitBet('${k}')">Log</button>`
+          +`</td><td></td></tr>`;
+      }
     });
   }
   html+='</tbody></table>';
@@ -2551,7 +2729,8 @@ function renderGame(game, extras){
       source=_so?`${_so.nBooks}-book consensus`:'DraftKings (de-vigged)';
     }
     if(fairHome!=null) fvPublish('mlb',{
-      id:'mlb:'+game.gamePk, league:'MLB', home:homeAbbr, away:awayAbbr,
+      id:'mlb:'+game.gamePk, gameId:game.gamePk, idSrc:'statsapi',
+      league:'MLB', home:homeAbbr, away:awayAbbr,
       start:gameTime?Date.parse(gameTime):null, fairHome, source,
     });
   })();
@@ -4618,7 +4797,8 @@ async function load(){
         const sp=(g.spread&&g.spread.home&&g.spread.home.odds!=null&&g.spread.away&&g.spread.away.odds!=null)
           ? devigPower([mlToRawProb(g.spread.home.odds),mlToRawProb(g.spread.away.odds)]) : null;
         if(dv) fvPublish('wnba',{
-          id:'wnba:'+g.espnId, league:'WNBA', home:g.homeAbbr, away:g.awayAbbr,
+          id:'wnba:'+g.espnId, gameId:g.espnId, idSrc:'espn',
+          league:'WNBA', home:g.homeAbbr, away:g.awayAbbr,
           start:g.gameDate?Date.parse(g.gameDate):null,
           fairHome:dv[0], source:'DraftKings (de-vigged)',
           spreadLine:sp?g.spread.home.line:null, spreadFairHome:sp?sp[0]:null,
