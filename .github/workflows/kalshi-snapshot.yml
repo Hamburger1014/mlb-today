@@ -2,12 +2,22 @@ name: Kalshi snapshot
 
 on:
   schedule:
-    # every 30 min, 14:00-05:30 UTC (roughly 10am ET through 12:30am ET).
+    # every 10 min, 14:00-05:50 UTC (roughly 10am ET through 12:50am ET).
     # Runs past 03:30 so late West-Coast tips (a 9pm CT Portland game ends
     # around 04:15 UTC) get graded the same night instead of waiting for
     # the next morning's run.
-    - cron: '*/30 14-23 * * *'
-    - cron: '*/30 0-5 * * *'
+    #
+    # Was */30. Two reasons it moved:
+    #  1. This snapshot is what the Fair Value Board prices off, and that board
+    #     is a PRICE tool — a 30-min-old quote is a wrong number, not a weaker
+    #     one. Measured on the live site at 41 min, past the page's own 35-min
+    #     "too old to act on" threshold.
+    #  2. GitHub's scheduled runs are best-effort and get dropped under load —
+    #     this repo has seen 1 of ~7 expected runs fire in a window. Three times
+    #     the shots on goal is redundancy as much as freshness.
+    # Cost is ~90 bot commits/day instead of ~30, which is fine for a data repo.
+    - cron: '*/10 14-23 * * *'
+    - cron: '*/10 0-5 * * *'
   workflow_dispatch:
   push:
     paths:
