@@ -157,6 +157,13 @@
     .fv-fair{font-variant-numeric:tabular-nums;text-align:right;width:4.5rem}
     .fv-need{font-variant-numeric:tabular-nums;text-align:right;width:5rem;color:#7dd3fc;font-weight:700}
     .fv-src{font-size:.66rem;color:var(--dim2);white-space:nowrap}
+    .fv-chips{display:flex;gap:6px;flex-wrap:wrap;padding:10px 18px 4px}
+    .fv-chip{background:transparent;border:1px solid var(--line);color:var(--dim);
+      border-radius:999px;padding:4px 11px;font-size:.72rem;font-weight:600;cursor:pointer;
+      font-family:inherit}
+    .fv-chip:hover{color:var(--fg)}
+    .fv-chip.on{background:#3a8ae8;border-color:#3a8ae8;color:#fff}
+    .fv-chip-n{opacity:.65;font-weight:400}
     .fv-tbl tr.fv-sp td{padding-top:0;font-size:.76rem;opacity:.85}
     @media(max-width:580px){
       .fv-tbl{font-size:.76rem}
@@ -640,7 +647,7 @@
      right whether or not any prediction here is any good, it works in every
      sport, and it does not expire when a season does. -->
 <div id="fv-view" style="display:none">
-  <div class="view-intro">📋 <b>Fair Value Board</b> · De-vigged fair price from the sharpest source available, and the <b>worst number still worth taking</b>. No model involved — this is a price comparison. Take the "need" column to a soft book (Fliff) and bet only when its price is <b>longer</b> than the number shown.</div>
+  <div class="view-intro">📋 <b>Fair Value Board</b> · MLB · WNBA · CFB · NFL · De-vigged fair price from the sharpest source available, and the <b>worst number still worth taking</b>. No model involved — this is a price comparison, so a row is right on days the models are not. Take the "need" column to a soft book (Fliff) and bet only when its price is <b>longer</b> than the number shown.</div>
   <main>
     <div id="fv-status" role="status" aria-live="polite" style="text-align:center;padding:30px;color:var(--dim)">Loading prices…</div>
     <div id="fv-board"></div>
@@ -696,16 +703,20 @@ function switchView(v){
   if(v==='wnba'){ stopLiveScorePolling(); if(!wnbaLoaded){ wnbaLoaded=true; WNBA.load(); } }
   else if(v==='fv'){
     stopLiveScorePolling();
-    // The board reads whatever the two views have already priced. WNBA loads
-    // lazily, so kick it off (into its hidden container) the first time.
-    if(!wnbaLoaded){ wnbaLoaded=true; WNBA.load().then(renderFairValue).catch(()=>{}); }
+    // The board reads whatever the two model views have already priced, and
+    // fetches football itself — those leagues have no view and don't need one.
+    if(!wnbaLoaded){ wnbaLoaded=true; Promise.resolve(WNBA.load()).then(renderFairValue).catch(()=>{}); }
+    fvFetchFootball().then(renderFairValue).catch(()=>{});
     renderFairValue();
   }
   else if(v==='mlb' && !_liveTimer && document.querySelector('#games-container .game-card')) startLiveScorePolling();
 }
 function refreshActiveView(){
   if(ACTIVE_VIEW==='wnba') return WNBA.load();
-  if(ACTIVE_VIEW==='fv')   return Promise.resolve(WNBA.load()).then(renderFairValue).catch(()=>renderFairValue());
+  if(ACTIVE_VIEW==='fv')   return Promise.all([
+    Promise.resolve(WNBA.load()).catch(()=>{}),
+    fvFetchFootball(true).catch(()=>{}),
+  ]).then(renderFairValue).catch(()=>renderFairValue());
   init();
 }
 
@@ -715,7 +726,70 @@ function refreshActiveView(){
 //  pure read of that. Deliberately model-free: `fair` is the de-vigged market
 //  price, never a prediction, so a row is right even on days the models are not.
 // ═══════════════════════════════════════════════════════════════
-const FV_ROWS={mlb:[],wnba:[]};
+const FV_ROWS={mlb:[],wnba:[],cfb:[],nfl:[]};
+// Football is board-only: there is no model view for it, and there does not need
+// to be. ESPN's scoreboard carries DraftKings moneyline, spread and total with
+// per-side juice in ONE call per league, which is everything a fair price needs.
+// This is the point of the board — coverage costs a request, not a model.
+const FV_FOOTBALL={
+  cfb:{label:'CFB', path:'football/college-football'},
+  nfl:{label:'NFL', path:'football/nfl'},
+};
+let _fvFetchedAt=0;
+function _fvNum(v){ if(v==null) return null; const n=parseFloat(String(v).replace(/^[ou+]/i,'')); return isNaN(n)?null:n; }
+async function fvFetchFootball(force){
+  if(!force && Date.now()-_fvFetchedAt < 120e3) return;   // 2-min cache; it is a price feed, not a firehose
+  const base='https://site.api.espn.com/apis/site/v2/sports/';
+  await Promise.all(Object.entries(FV_FOOTBALL).map(async ([key,cfg])=>{
+    try{
+      let evs=await _fvScoreboard(base+cfg.path+'/scoreboard?limit=200');
+      // Out of season the default scoreboard is empty or odds-free; look ahead a
+      // month so the opening slate shows up before week 1 rather than after it.
+      if(!evs.some(_fvHasOdds)){
+        const d0=new Date(), d1=new Date(Date.now()+30*864e5);
+        const f=d=>d.toISOString().slice(0,10).replace(/-/g,'');
+        evs=await _fvScoreboard(`${base}${cfg.path}/scoreboard?limit=200&dates=${f(d0)}-${f(d1)}`);
+      }
+      fvClear(key);
+      for(const ev of evs){
+        const c=(ev.competitions||[])[0]; if(!c) continue;
+        if((c.status?.type?.name||'')!=='STATUS_SCHEDULED') continue;
+        const o=(c.odds||[])[0]; if(!o) continue;
+        const home=(c.competitors||[]).find(t=>t.homeAway==='home');
+        const away=(c.competitors||[]).find(t=>t.homeAway==='away');
+        if(!home||!away) continue;
+        const ml=o.moneyline||{}, ps=o.pointSpread||{}, tt=o.total||{};
+        // A quarter of a CFB slate has moneyline "OFF" — books skip the ML on
+        // big mismatches — but still post spread and total. Those are the
+        // markets that matter in football anyway, so price what exists rather
+        // than dropping the game.
+        const mlH=_fvNum(ml.home?.close?.odds), mlA=_fvNum(ml.away?.close?.odds);
+        const dv=(mlH!=null&&mlA!=null)?devigPower([mlToRawProb(mlH),mlToRawProb(mlA)]):null;
+        const spH=_fvNum(ps.home?.close?.odds), spA=_fvNum(ps.away?.close?.odds);
+        const spDv=(spH!=null&&spA!=null)?devigPower([mlToRawProb(spH),mlToRawProb(spA)]):null;
+        const ovO=_fvNum(tt.over?.close?.odds), unO=_fvNum(tt.under?.close?.odds);
+        const tDv=(ovO!=null&&unO!=null)?devigPower([mlToRawProb(ovO),mlToRawProb(unO)]):null;
+        if(!dv && !spDv && !tDv) continue;
+        fvPublish(key,{
+          id:key+':'+ev.id, league:cfg.label,
+          home:home.team?.abbreviation||'HOME', away:away.team?.abbreviation||'AWAY',
+          start:ev.date?Date.parse(ev.date):null,
+          fairHome:dv?dv[0]:null, source:(o.provider?.name||'Book')+' (de-vigged)',
+          spreadLine:spDv?_fvNum(ps.home?.close?.line):null, spreadFairHome:spDv?spDv[0]:null,
+          totalLine:tDv?_fvNum(tt.over?.close?.line):null, totalFairOver:tDv?tDv[0]:null,
+        });
+      }
+    }catch(e){ /* one league failing must not blank the board */ }
+  }));
+  _fvFetchedAt=Date.now();
+}
+function _fvHasOdds(ev){ return !!(((ev.competitions||[])[0]||{}).odds||[]).length; }
+async function _fvScoreboard(url){
+  const d=await espnFetch(url);
+  return (d&&d.events)||[];
+}
+let FV_FILTER='all';
+function fvSetFilter(v){ FV_FILTER=v; renderFairValue(); }
 function fvPublish(league,row){
   const a=FV_ROWS[league]; if(!a) return;
   const i=a.findIndex(r=>r.id===row.id);
@@ -723,16 +797,25 @@ function fvPublish(league,row){
 }
 function fvClear(league){ if(FV_ROWS[league]) FV_ROWS[league].length=0; }
 function renderFairValue(){
-  const rows=[...FV_ROWS.mlb,...FV_ROWS.wnba]
-    .filter(r=>r.fairHome!=null)
+  const all=[...FV_ROWS.mlb,...FV_ROWS.wnba,...FV_ROWS.cfb,...FV_ROWS.nfl]
+    .filter(r=>r.fairHome!=null||r.spreadFairHome!=null||r.totalFairOver!=null)
     .sort((a,b)=>(a.start||0)-(b.start||0));
+  const counts={};
+  for(const r of all) counts[r.league]=(counts[r.league]||0)+1;
+  const rows=FV_FILTER==='all'?all:all.filter(r=>r.league===FV_FILTER);
   const status=document.getElementById('fv-status'), board=document.getElementById('fv-board');
-  if(!rows.length){
+  if(!all.length){
     status.style.display=''; board.innerHTML='';
     status.textContent='No priced games yet — open MLB or WNBA once so prices load, then come back.';
     return;
   }
   status.style.display='none';
+  // A full CFB Saturday is ~99 games. Without a filter this screen stops being
+  // scannable, which defeats the point of having it.
+  const chip=(v,label,n)=>`<button class="fv-chip${FV_FILTER===v?' on':''}" onclick="fvSetFilter('${v}')">${label}${n!=null?` <span class="fv-chip-n">${n}</span>`:''}</button>`;
+  let chips='<div class="fv-chips">'+chip('all','All',all.length);
+  for(const lg of Object.keys(counts).sort()) chips+=chip(lg,lg,counts[lg]);
+  chips+='</div>';
   // Freshness is not decoration here. Every number below is a PRICE, and acting
   // on a stale price is the one way this screen can lose money on its own — the
   // model can be wrong and the board still right, but a stale fair value is
@@ -746,28 +829,41 @@ function renderFairValue(){
       +`${bad?'&#x26A0;&#xFE0F;':'&#x1F551;'} Kalshi rows are priced off a <b>${ageMin}-min-old</b> snapshot, not a live quote`
       +`${bad?' — too old to act on. Refresh, or price these from a live source.':'.'}</div>`;
   }
-  let html=fresh+'<table class="fv-tbl"><thead><tr><th>Game</th><th>Side</th><th>Fair</th><th>Need</th><th>Source</th></tr></thead><tbody>';
+  let html=chips+fresh+'<table class="fv-tbl"><thead><tr><th>Game</th><th>Side</th><th>Fair</th><th>Need</th><th>Source</th></tr></thead><tbody>';
   for(const r of rows){
-    const t=r.start?new Date(r.start).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}):'';
-    const legs=[[r.away,1-r.fairHome],[r.home,r.fairHome]];
-    legs.forEach(([side,p],i)=>{
-      html+=`<tr class="${i===0?'fv-first':''}">`
-        +(i===0?`<td rowspan="2" class="fv-game"><b>${esc(r.away)}@${esc(r.home)}</b><span class="fv-meta">${esc(r.league)} · ${t}</span></td>`:'')
-        +`<td class="fv-side">${esc(side)}</td>`
-        +`<td class="fv-fair">${(p*100).toFixed(1)}%</td>`
-        +`<td class="fv-need">${fvAmer(breakEvenAmerican(p))}</td>`
-        +(i===0?`<td rowspan="2" class="fv-src">${esc(r.source)}</td>`:'')
+    const d=r.start?new Date(r.start):null;
+    // Football slates run days out, so a bare clock time is ambiguous there.
+    const t=d?(Math.abs(d-Date.now())>20*3600e3
+      ? d.toLocaleDateString([], {month:'short',day:'numeric'})+' '+d.toLocaleTimeString([], {hour:'numeric'})
+      : d.toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})):'';
+    // Build only the markets this game actually has a price for. Football
+    // regularly posts a spread and total with the moneyline "OFF"; MLB and
+    // WNBA carry a moneyline and sometimes nothing else.
+    const legs=[];
+    if(r.fairHome!=null){
+      legs.push({label:r.away, p:1-r.fairHome});
+      legs.push({label:r.home, p:r.fairHome});
+    }
+    if(r.spreadLine!=null && r.spreadFairHome!=null)
+      legs.push({label:`spread ${fvLine(r.spreadLine)} ${r.home}`, p:r.spreadFairHome, sub:true});
+    if(r.totalLine!=null && r.totalFairOver!=null)
+      legs.push({label:`over ${r.totalLine}`, p:r.totalFairOver, sub:true});
+    if(!legs.length) continue;
+    legs.forEach((leg,i)=>{
+      html+=`<tr class="${i===0?'fv-first':(leg.sub?'fv-sp':'')}">`
+        +(i===0?`<td rowspan="${legs.length}" class="fv-game"><b>${esc(r.away)}@${esc(r.home)}</b><span class="fv-meta">${esc(r.league)} · ${t}</span></td>`:'')
+        +`<td class="fv-side">${esc(leg.label)}</td>`
+        +`<td class="fv-fair">${(leg.p*100).toFixed(1)}%</td>`
+        +`<td class="fv-need">${fvAmer(breakEvenAmerican(leg.p))}</td>`
+        +(i===0?`<td rowspan="${legs.length}" class="fv-src">${esc(r.source)}</td>`:'')
         +'</tr>';
     });
-    if(r.spreadLine!=null && r.spreadFairHome!=null){
-      html+=`<tr class="fv-sp"><td class="fv-side">spread ${fvLine(r.spreadLine)} ${esc(r.home)}</td>`
-        +`<td class="fv-fair">${(r.spreadFairHome*100).toFixed(1)}%</td>`
-        +`<td class="fv-need">${fvAmer(breakEvenAmerican(r.spreadFairHome))}</td><td></td><td></td></tr>`;
-    }
   }
   html+='</tbody></table>';
   board.innerHTML=html+'<div class="bb-foot" style="padding:12px 18px">'
-    +'<b>How to use it.</b> "Need" is the worst American price at which that side is still break-even. Bet it only at a <b>longer</b> price than shown — −140 is a bet when the need says −155, and a pass when the need says −130. The fair column is the de-vigged market, so it already contains everything the market knows; you are not being paid for an opinion here, you are being paid for a better price. Prices are as fresh as the source view — hit Refresh before acting.</div>';
+    +'<b>How to use it.</b> "Need" is the worst American price at which that side is still break-even. Bet it only at a <b>longer</b> price than shown — −140 is a bet when the need says −155, and a pass when the need says −130. The fair column is the de-vigged market, so it already contains everything the market knows; you are not being paid for an opinion here, you are being paid for a better price. '
+    +'<b>Spreads and totals behave differently.</b> Both sides are usually −110, so the de-vigged fair sits at ~50% and the need comes back ~−100 — which means a standard −110 spread is never +EV on juice alone. There, the edge has to come from a <b>different line</b> (a soft book on +8.5 when this says +7.5), not a better price on the same one. Moneylines are where a price difference alone can pay. '
+    +'Prices are as fresh as the source — hit Refresh before acting.</div>';
 }
 function fvAmer(v){ return v==null?'—':(v>0?'+'+v:String(v)); }
 function fvLine(l){ return l==null?'':(l>0?'+'+l:String(l)); }
