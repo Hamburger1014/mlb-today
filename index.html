@@ -179,8 +179,13 @@
     @media(max-width:580px){
       .fv-tbl{font-size:.76rem}
       .fv-tbl td,.fv-tbl thead th{padding:6px 6px}
+      /* Hide the Source column on narrow screens — its header is the 5th th,
+         not the last one. The log-bet button was added as a 6th column later,
+         which made `th:last-child` hide the WRONG header: Source's heading
+         stayed while its cells vanished, so the columns misaligned and the
+         table ran 8px past the viewport. */
       .fv-src{display:none}
-      .fv-tbl thead th:last-child{display:none}
+      .fv-tbl thead th:nth-child(5){display:none}
     }
     .bb-ok{color:var(--green);font-size:.7rem}
     /* Paper-only variant: the green "go bet this" styling is deliberately
@@ -596,6 +601,7 @@
 <div id="nav-overlay" onclick="toggleMenu()"></div>
 <nav id="nav-menu" inert aria-label="Sections">
   <div class="nav-head">Sections</div>
+  <button class="nav-item" data-view="card" onclick="switchView('card')">🃏 Today's Card</button>
   <button class="nav-item active" data-view="mlb" onclick="switchView('mlb')">⚾ MLB Today</button>
   <button class="nav-item" data-view="wnba" onclick="switchView('wnba')">🏀 WNBA Today</button>
   <button class="nav-item" data-view="nfl" onclick="switchView('nfl')">🏈 NFL</button>
@@ -651,6 +657,17 @@
       </div>
     </div>
     <div id="wnba-games" style="display:flex;flex-direction:column;gap:12px"></div>
+  </main>
+</div>
+
+<!-- ── TODAY'S CARD ──
+     The morning page: every sport, ranked, with a unit size. Deliberately
+     conservative about what earns a slot - see cardCandidates(). -->
+<div id="card-view" style="display:none">
+  <div class="view-intro">🃏 <b>Today&rsquo;s Card</b> · Every sport, ranked by edge, sized in units · <b>CROSS-BOOK</b> plays need no model to be right &mdash; two independent de-vigged prices disagree, so one is buyable. <b>MODEL</b> plays appear only for markets whose model beat its price under measurement; MLB contributes none, because it did not. <b>1 unit = 1% of bankroll.</b></div>
+  <main>
+    <div id="card-status" role="status" aria-live="polite" style="text-align:center;padding:30px;color:var(--dim)">Building today&rsquo;s card…</div>
+    <div id="card-body"></div>
   </main>
 </div>
 
@@ -722,13 +739,24 @@ function switchView(v){
   document.getElementById('wnba-view').style.display = v==='wnba'?'':'none';
   document.getElementById('fv-view').style.display   = v==='fv'?'':'none';
   document.getElementById('nfl-view').style.display  = v==='nfl'?'':'none';
-  const ICON={mlb:'⚾',wnba:'🏀',nfl:'🏈',fv:'📋'},
-        NAME={mlb:'MLB Today',wnba:'WNBA Today',nfl:'NFL',fv:'Fair Value'};
+  document.getElementById('card-view').style.display = v==='card'?'':'none';
+  const ICON={mlb:'⚾',wnba:'🏀',nfl:'🏈',fv:'📋',card:'🃏'},
+        NAME={mlb:'MLB Today',wnba:'WNBA Today',nfl:'NFL',fv:'Fair Value',card:"Today's Card"};
   document.getElementById('hdr-logo').textContent    = ICON[v]||'⚾';
   document.getElementById('hdr-title').textContent   = NAME[v]||'MLB Today';
   document.querySelectorAll('.nav-item').forEach(b=>b.classList.toggle('active',b.dataset.view===v));
   toggleMenu();
   if(v==='wnba'){ stopLiveScorePolling(); if(!wnbaLoaded){ wnbaLoaded=true; WNBA.load(); } }
+  else if(v==='card'){
+    stopLiveScorePolling();
+    // The card spans every sport, so it needs all of them primed. WNBA loads
+    // lazily and football is board-only, so kick both off; MLB is already in
+    // memory from init.
+    const jobs=[fvFetchFootball().catch(()=>{})];
+    if(!wnbaLoaded){ wnbaLoaded=true; jobs.push(Promise.resolve(WNBA.load()).catch(()=>{})); }
+    Promise.all(jobs).then(renderCard).catch(()=>renderCard());
+    renderCard();
+  }
   else if(v==='nfl'){
     stopLiveScorePolling();
     Promise.all([fvFetchFootball().catch(()=>{}), loadFootballLines().catch(()=>{})])
@@ -748,6 +776,10 @@ function switchView(v){
 }
 function refreshActiveView(){
   if(ACTIVE_VIEW==='wnba') return WNBA.load();
+  if(ACTIVE_VIEW==='card') return Promise.all([
+    fvFetchFootball(true).catch(()=>{}),
+    Promise.resolve(WNBA.load()).catch(()=>{}),
+  ]).then(renderCard).catch(()=>renderCard());
   if(ACTIVE_VIEW==='nfl')  return Promise.all([fvFetchFootball(true).catch(()=>{}), loadFootballLines().catch(()=>{})])
     .then(renderNFL).catch(()=>renderNFL());
   if(ACTIVE_VIEW==='fv')   return Promise.all([
@@ -2623,6 +2655,12 @@ function renderGame(game, extras){
     let fairHome=null, source=null;
     const dv=(_asks&&_asks.homeAsk!=null&&_asks.awayAsk!=null)
       ? devigPower([_asks.homeAsk,_asks.awayAsk]) : null;
+    // Both prices are kept, not just the preferred one. Two independent
+    // de-vigged quotes on the same game is the only model-free edge signal this
+    // site can compute automatically — where they disagree, one of them is
+    // buyable. Discarding the second source threw that away.
+    const fairKalshi = dv?dv[0]:null;
+    const fairBook   = (fairHomeSharp!=null)?fairHomeSharp:null;
     if(dv){ fairHome=dv[0]; source='Kalshi (de-vigged)'; }
     else if(fairHomeSharp!=null){
       fairHome=fairHomeSharp;
@@ -2632,6 +2670,10 @@ function renderGame(game, extras){
       id:'mlb:'+game.gamePk, gameId:game.gamePk, idSrc:'statsapi',
       league:'MLB', home:homeAbbr, away:awayAbbr,
       start:gameTime?Date.parse(gameTime):null, fairHome, source,
+      fairKalshi, fairBook,
+      askHome:_asks?_asks.homeAsk:null, askAway:_asks?_asks.awayAsk:null,
+      bookHomeML:(odds&&odds.homeML!=null)?odds.homeML:null,
+      bookAwayML:(odds&&odds.awayML!=null)?odds.awayML:null,
     });
   })();
   const bet = _asks ? evaluateBet(modelHomeP, _asks, homeAbbr, awayAbbr) : null;
@@ -3553,6 +3595,162 @@ function wireGameControls(container, ctrls){
 // scheduled Action. The on-page "Realized" line above it comes from THIS
 // browser's localStorage and also blends bets made before the July-31 Poisson
 // fix; this line is browser-independent and post-fix only.
+/* === TODAY'S CARD - cross-sport bets, ranked and sized =====================
+   One page that answers "what do I bet today, and how much". Two kinds of
+   candidate get on it, and the distinction is the whole design:
+
+   1. CROSS-BOOK. MLB and WNBA carry two independent de-vigged prices (Kalshi
+      and DraftKings). Where they disagree by more than the cost of trading,
+      one of them is buyable. This needs NO model to be right - it is the only
+      automatable edge this site has, and it is the stale-line idea from the
+      playbook in the form actually reachable from here.
+   2. MODEL. Only from markets whose model earned weight against the price:
+      currently the WNBA spread (w=0.40) and, barely, the WNBA moneyline
+      (w=0.15). MLB full game and MLB F5 were measured and lost to the market,
+      so they contribute nothing - deliberately, not by oversight.
+
+   NFL and CFB have one price source and no model, so they cannot be ranked
+   automatically. They appear as a manual-check list with the fair number.
+
+   SIZING. 1 unit = 1% of bankroll. Stake is fractional Kelly on the SHRUNK
+   edge, then capped per game and per day by the same correlated-exposure rules
+   the rest of the site uses. Edges are shrunk because flagged bets are selected
+   for the largest disagreement, which is disproportionately where WE are wrong:
+   measured on WNBA flags, realised edge was ~37% of claimed. */
+let CARD_MODEL_PLAYS = [];      // filled by the WNBA render; see below
+const CARD_UNIT = 0.01;          // 1 unit = 1% of bankroll
+// Two different shrinks, because the two signals fail in different ways.
+//
+// MODEL plays are selected for the biggest model-vs-price disagreement, which
+// is disproportionately where the MODEL is wrong; realised edge on WNBA flags
+// was ~37% of claimed, so that is the factor.
+//
+// CROSS-BOOK plays are not a model error at all - they are two venues quoting
+// different numbers - so the 0.37 factor does not apply and using it here was
+// wrong: it demanded ~7pp of disagreement between two liquid venues, which
+// never happens, and quietly made the whole path dead. Measured today: biggest
+// gap 1.09pp, median 0.36pp. What cross-book actually risks is execution (the
+// ask you pay is not the de-vigged mid) and STALENESS, and staleness is handled
+// by a freshness gate below rather than by a fudge factor.
+const CARD_MODEL_SHRINK = 0.37;
+const CARD_CROSS_SHRINK = 0.85;  // execution slippage, not model error
+const CARD_MIN_EDGE = 0.02;      // 2pp after shrink, or it is not worth a slot
+// A cross-book gap is only real if BOTH quotes are current. The Kalshi side
+// comes from a snapshot that can be tens of minutes old, and a stale quote
+// manufactures fake disagreement - the single most likely way this page could
+// invent a bet that is not there.
+const CARD_MAX_STALE_MIN = 35;
+// A cross-book edge has to clear the cost of actually trading it, or it is an
+// illusion. Kalshi's taker fee peaks at 1.75c on a coin flip.
+function _cardCost(p){ return KALSHI_FEE*p*(1-p); }
+
+function cardCandidates(){
+  const out=[];
+  const add=(league,row,sideHome,pFair,pPrice,kind,note,priceAmer)=>{
+    if(pFair==null||pPrice==null||pPrice<=0.02||pPrice>=0.98) return;
+    const raw=pFair-pPrice;
+    const edge=raw*(kind==='CROSS'?CARD_CROSS_SHRINK:CARD_MODEL_SHRINK)-_cardCost(pPrice);
+    if(edge<CARD_MIN_EDGE) return;
+    const b=(1-pPrice)/pPrice;
+    const kelly=b>0?Math.max(0,(pFair*(b+1)-1)/b):0;
+    out.push({league, kind, note,
+      matchup:row.away+'@'+row.home, gameId:row.gameId, start:row.start,
+      side:sideHome?row.home:row.away,
+      fair:pFair, price:pPrice,
+      priceAmer:(priceAmer!=null)?priceAmer:breakEvenAmerican(pPrice),
+      rawEdge:raw, edge, kelly:Math.min(0.05,KELLY_FRACTION*kelly)});
+  };
+
+  // cross-book: two independent de-vigged quotes on one game disagree.
+  // Skipped entirely when the Kalshi snapshot is stale, because then a "gap"
+  // is just the clock, and betting it is betting on old news.
+  const ageMin=kalshiAgeMin();
+  const kalshiFresh = (ageMin==null) || (ageMin<=CARD_MAX_STALE_MIN);
+  for(const row of (kalshiFresh?[...FV_ROWS.mlb,...FV_ROWS.wnba]:[])){
+    const k=row.fairKalshi, bk=row.fairBook;
+    if(k==null||bk==null) continue;
+    // Buy from whichever venue prices the side lower, valued at the other's fair.
+    if(bk>k) add(row.league,row,true, bk,k,'CROSS','Kalshi cheap vs book');
+    else if(k>bk) add(row.league,row,true, k,bk,'CROSS','Book cheap vs Kalshi',row.bookHomeML);
+    if((1-bk)>(1-k)) add(row.league,row,false, 1-bk,1-k,'CROSS','Kalshi cheap vs book');
+    else if((1-k)>(1-bk)) add(row.league,row,false, 1-k,1-bk,'CROSS','Book cheap vs Kalshi',row.bookAwayML);
+  }
+
+  // model plays: only where weight was earned against the price
+  const mp=(typeof CARD_MODEL_PLAYS!=='undefined')?CARD_MODEL_PLAYS:[];
+  for(const b of mp){
+    if(b.p==null||b.mkt==null) continue;
+    const raw=b.p-b.mkt;
+    const edge=raw*CARD_MODEL_SHRINK;
+    if(edge<CARD_MIN_EDGE) continue;
+    const bo=mlPayout(b.ml);
+    const kelly=bo>0?Math.max(0,(b.p*(bo+1)-1)/bo):0;
+    out.push({league:b.league||'WNBA', kind:'MODEL',
+      note:b.type==='SPREAD'?'spread model (w=0.40)':'moneyline model (w=0.15)',
+      matchup:b.matchup, gameId:b.gameId, start:b.start||null, side:b.label,
+      fair:b.p, price:b.mkt, priceAmer:b.ml, rawEdge:raw, edge,
+      kelly:Math.min(0.05,KELLY_FRACTION*kelly)});
+  }
+
+  out.sort((x,y)=>y.edge-x.edge);
+  capExposure(out, c=>c.kelly, c=>c.gameId);
+  return out;
+}
+
+function renderCard(){
+  const box=document.getElementById('card-body'), st=document.getElementById('card-status');
+  if(!box) return;
+  const plays=cardCandidates();
+  const units=c=>((c.stakeCapped!=null?c.stakeCapped:c.kelly)/CARD_UNIT);
+  const total=plays.reduce((s,c)=>s+units(c),0);
+  if(st) st.style.display='none';
+  let html='';
+  if(!plays.length){
+    const ageMin=kalshiAgeMin();
+    const stale=(ageMin!=null && ageMin>CARD_MAX_STALE_MIN)
+      ? '<div class="bb-foot" style="color:#f87171;margin:0;padding:8px 18px">&#x26A0;&#xFE0F; Cross-book plays are suppressed: the Kalshi snapshot is <b>'+ageMin+' min old</b>, and a stale quote invents disagreement that is not there. Refresh, or wait for the next snapshot.</div>'
+      : '';
+    html='<div class="best-bets"><div class="bb-title">&#x1F0CF; Today\'s Card</div>'+stale
+      +'<div class="bb-empty">No bets today. Two independent prices agree on every game, and no model with earned weight disagrees with its market by enough to pay for the trade. <b>Most days will look like this</b> &mdash; it is the correct output of a system that was measured rather than assumed, not a loading failure.</div></div>';
+  }else{
+    let rows='';
+    for(const c of plays){
+      const u=units(c);
+      const tag=c.kind==='CROSS'
+        ?'<span class="bb-type" style="background:#0e3a52;color:#7dd3fc">CROSS-BOOK</span>'
+        :'<span class="bb-type bb-type-sp">MODEL</span>';
+      const stake=u<0.05
+        ?'<span class="bb-stake" style="opacity:.65">no room (cap)</span>'
+        :'<span class="bb-stake"><b style="color:var(--gold);font-size:.9rem">'+u.toFixed(1)+'u</b></span>';
+      rows+='<div class="bb-row"><span class="bb-mu">'+esc(c.matchup)+'</span>'+tag
+        +'<span class="bb-pick">'+esc(String(c.side))+' '+fvAmer(c.priceAmer)+'</span>'
+        +'<span class="bb-edge">+'+(c.edge*100).toFixed(1)+'pp</span>'
+        +'<span class="bb-ok">'+esc(c.league)+' &middot; '+esc(c.note)+'</span>'+stake+'</div>';
+    }
+    html='<div class="best-bets"><div class="bb-title">&#x1F0CF; Today\'s Card <span class="bb-count">'+plays.length+'</span> '
+      +'<span style="font-weight:400;opacity:.6;font-size:.62rem">'+total.toFixed(1)+' units at risk</span></div>'+rows
+      +'<div class="bb-foot"><b>1 unit = 1% of bankroll.</b> Stake is quarter-Kelly on the edge after a shrink of '+(CARD_MODEL_SHRINK*100).toFixed(0)+'% on model plays and '+(CARD_CROSS_SHRINK*100).toFixed(0)+'% on cross-book &mdash; plays are selected for the biggest disagreement, which is disproportionately where the model is wrong, and measured realised edge on WNBA flags was ~37% of claimed. Capped at '+(MAX_STAKE_GAME/CARD_UNIT).toFixed(0)+'u per game and '+(MAX_STAKE_DAY/CARD_UNIT).toFixed(0)+'u per day, because bets on one game are one position. '
+      +'<b>CROSS-BOOK</b> needs no model to be right: two independent de-vigged prices disagree, so one is buyable &mdash; edge is shown net of the trading cost. <b>MODEL</b> appears only for markets whose model earned weight against the price; MLB contributes nothing because it was measured and lost. Not financial advice.</div></div>';
+  }
+  // NFL/CFB: one price source, no model - nothing to rank against, so listed
+  // for manual comparison rather than dressed up as a ranked play.
+  const manual=[...FV_ROWS.nfl,...FV_ROWS.cfb].filter(r=>r.fairHome!=null)
+    .sort((a,b)=>(a.start||0)-(b.start||0)).slice(0,12);
+  if(manual.length){
+    let m='';
+    for(const r of manual){
+      m+='<div class="bb-row"><span class="bb-mu">'+esc(r.away)+'@'+esc(r.home)+'</span>'
+        +'<span class="bb-pick">'+esc(r.away)+' '+fvAmer(breakEvenAmerican(1-r.fairHome))
+        +' / '+esc(r.home)+' '+fvAmer(breakEvenAmerican(r.fairHome))+'</span>'
+        +'<span class="bb-ok">'+esc(r.league)+'</span></div>';
+    }
+    html+='<div class="best-bets" style="margin-top:12px"><div class="bb-title">&#x1F50E; Check by hand '
+      +'<span style="font-weight:400;opacity:.6;font-size:.62rem">one price source, no model</span></div>'+m
+      +'<div class="bb-foot">Football has a single book here and no model, so there is nothing to rank it against automatically. These are the fair numbers &mdash; take them to a soft book and bet only at a <b>longer</b> price.</div></div>';
+  }
+  box.innerHTML=html;
+}
+
 // ── FOOTBALL CLOSING LINES (for bet-level CLV) ───────────────────────────────
 // The football views are market-only: no model, therefore no model-CLV. What
 // does exist is BET-level CLV — for a wager in the ledger, did the price taken
@@ -4761,11 +4959,14 @@ async function load(){
         const dv=devigPower([mlToRawProb(g.inlineOdds.homeML),mlToRawProb(g.inlineOdds.awayML)]);
         const sp=(g.spread&&g.spread.home&&g.spread.home.odds!=null&&g.spread.away&&g.spread.away.odds!=null)
           ? devigPower([mlToRawProb(g.spread.home.odds),mlToRawProb(g.spread.away.odds)]) : null;
+        const kHome=(kGame&&kGame.homeP!=null)?kGame.homeP:null;
         if(dv) fvPublish('wnba',{
           id:'wnba:'+g.espnId, gameId:g.espnId, idSrc:'espn',
           league:'WNBA', home:g.homeAbbr, away:g.awayAbbr,
           start:g.gameDate?Date.parse(g.gameDate):null,
           fairHome:dv[0], source:'DraftKings (de-vigged)',
+          fairBook:dv[0], fairKalshi:kHome,
+          bookHomeML:g.inlineOdds.homeML, bookAwayML:g.inlineOdds.awayML,
           spreadLine:sp?g.spread.home.line:null, spreadFairHome:sp?sp[0]:null,
         });
       }
@@ -4790,6 +4991,12 @@ async function load(){
   // per game and per day so a slate of correlated flags can't compound into a
   // much larger bet than any single Kelly number ever authorised.
   capExposure(plays, p=>p.kelly, p=>p.gameId);
+  // Hand these to Today's Card. Only WNBA feeds it, because only the WNBA
+  // models earned weight against their price under measurement.
+  CARD_MODEL_PLAYS = plays.map(p=>({
+    league:'WNBA', type:p.type, matchup:p.matchup, gameId:p.gameId,
+    label:p.label, ml:p.ml, p:p.p, mkt:p.mkt, start:null,
+  }));
   document.getElementById('wnba-games').innerHTML=renderBestBets(plays)+html;
   renderTrackBar();
   scheduleLiveRefresh(games);
