@@ -700,7 +700,11 @@
 const KALSHI_BASE = 'https://api.elections.kalshi.com/trade-api/v2';
 // Your own Cloudflare Worker proxy (Kalshi blocks direct browser calls).
 // Deploy kalshi-proxy-worker.js, then paste its URL here e.g. 'https://mlb-kalshi.<you>.workers.dev'
-const KALSHI_PROXY = 'https://mlb-kalshi.gabrielhiginio2005.workers.dev';
+// Cloudflare Worker that proxies The Odds API so the key stays a server-side
+// secret and never ships in this page. (Same Worker that used to proxy Kalshi;
+// the hostname is historical.) Returns 503 "odds key not configured" until
+// `wrangler secret put ODDS_API_KEY` has been run.
+const ODDS_PROXY = 'https://mlb-kalshi.gabrielhiginio2005.workers.dev';
 const MLB_BASE    = 'https://statsapi.mlb.com/api/v1';
 const ESPN_SITE   = 'https://site.api.espn.com/apis/site/v2/sports/baseball/mlb';
 const ESPN_CORE   = 'https://sports.core.api.espn.com/v2/sports/baseball/leagues/mlb';
@@ -2503,7 +2507,7 @@ function renderGame(game, extras){
     // de-vigged quotes on the same game is the only model-free edge signal this
     // site can compute automatically — where they disagree, one of them is
     // buyable. Discarding the second source threw that away.
-    const fairKalshi = dv?dv[0]:null;
+    const fairSharp = _so ? _so.fairHome : null;   // Pinnacle/consensus reference
     const fairBook   = (fairHomeSharp!=null)?fairHomeSharp:null;
     if(fairHomeSharp!=null){
       fairHome=fairHomeSharp;
@@ -2513,7 +2517,8 @@ function renderGame(game, extras){
       id:'mlb:'+game.gamePk, gameId:game.gamePk, idSrc:'statsapi',
       league:'MLB', home:homeAbbr, away:awayAbbr,
       start:gameTime?Date.parse(gameTime):null, fairHome, source,
-      fairKalshi, fairBook,
+      fairSharp, fairBook,
+      sharpBooks:_so?_so.nBooks:null, sharpIsPinnacle:_so?!!_so.pinnacle:false,
       askHome:_asks?_asks.homeAsk:null, askAway:_asks?_asks.awayAsk:null,
       bookHomeML:(odds&&odds.homeML!=null)?odds.homeML:null,
       bookAwayML:(odds&&odds.awayML!=null)?odds.awayML:null,
@@ -2904,6 +2909,7 @@ function normName(s){ return (s||'').toLowerCase().replace(/[^a-z ]/g,'').replac
 function median(a){ if(!a.length) return null; const s=[...a].sort((x,y)=>x-y),m=s.length>>1;
   return s.length%2?s[m]:(s[m-1]+s[m])/2; }
 
+let SHARP_STATUS='nokey';   // nokey | live | empty | error
 let sharpOdds = {};   // key "home|away" -> [{fairHome, nBooks, commence}, ...]
 
 // Pick the sharp fair value for a specific game (closest start time; guards
@@ -2918,37 +2924,52 @@ function sharpFairFor(homeName, awayName, gameTimeISO){
 }
 
 // Devig all books for every game and cache the consensus fair prob.
-async function fetchSharpOdds(){
+async function fetchSharpOdds(sport='mlb'){
   try{
-    const cached=JSON.parse(localStorage.getItem('mlb_sharp_odds_v2')||'null');
+    const ck='sharp_odds_'+sport+'_v3';
+    const cached=JSON.parse(localStorage.getItem(ck)||'null');
     if(cached && (Date.now()-cached.ts) < ODDS_CACHE_MIN*60000){ sharpOdds=cached.map; return; }
   }catch(e){}
   try{
-    // Odds come through YOUR Cloudflare Worker (key lives there as a secret).
-    // Fall back to a direct call only if a key is hardcoded (legacy/dev).
-    const url = KALSHI_PROXY ? ''
-      : `https://api.the-odds-api.com/v4/sports/baseball_mlb/odds/?apiKey=${ODDS_API_KEY}&regions=us&markets=h2h&oddsFormat=decimal`;
-    const r=await fetch(url); if(!r.ok) return;
+    const r=await fetch(`${ODDS_PROXY}?odds=${encodeURIComponent(sport)}`);
+    if(!r.ok){
+      // 503 = no key configured yet. Not an error worth shouting about; the
+      // page simply has one price source until the secret is set.
+      SHARP_STATUS = r.status===503 ? 'nokey' : 'error';
+      return;
+    }
     const games=await r.json(); const map={};
     for(const g of games){
-      const fairs=[];
+      // Prefer PINNACLE when present: it is the sharpest price available and a
+      // better fair value than a median that includes soft books. Otherwise
+      // take the median across books, which is more robust than a mean when one
+      // book is stale.
+      let pin=null; const fairs=[];
       for(const bk of (g.bookmakers||[])){
         const mk=(bk.markets||[]).find(m=>m.key==='h2h'); if(!mk) continue;
         const ho=mk.outcomes.find(o=>o.name===g.home_team), ao=mk.outcomes.find(o=>o.name===g.away_team);
         if(!ho||!ao||!ho.price||!ao.price) continue;
-        const hi=1/ho.price, ai=1/ao.price;          // implied (with vig)
-        fairs.push(hi/(hi+ai));                        // devig: home share
+        // Power de-vig, same as everywhere else on this page — proportional
+        // over-states the underdog, which is where a payout-scaled edge lies.
+        const dv=devigPower([1/ho.price, 1/ao.price]);
+        if(!dv) continue;
+        if(bk.key==='pinnacle') pin=dv[0];
+        fairs.push(dv[0]);
       }
-      if(fairs.length){
-        // Teams can play a multi-game series, so store every game keyed by team
-        // pair AND its start time; the lookup picks the closest one in time.
-        const key=normName(g.home_team)+'|'+normName(g.away_team);
-        (map[key]=map[key]||[]).push({fairHome:median(fairs),nBooks:fairs.length,commence:Date.parse(g.commence_time)});
-      }
+      if(!fairs.length) continue;
+      fairs.sort((x,y)=>x-y);
+      const med=fairs.length%2 ? fairs[(fairs.length-1)/2]
+                               : (fairs[fairs.length/2-1]+fairs[fairs.length/2])/2;
+      const key=normName(g.home_team)+'|'+normName(g.away_team);
+      (map[key]=map[key]||[]).push({
+        fairHome: pin!=null?pin:med, nBooks: fairs.length,
+        pinnacle: pin!=null, commence: Date.parse(g.commence_time),
+      });
     }
     sharpOdds=map;
-    try{ localStorage.setItem('mlb_sharp_odds_v2',JSON.stringify({ts:Date.now(),map})); }catch(e){}
-  }catch(e){ console.warn('sharp odds fetch failed:',e.message); }
+    SHARP_STATUS = Object.keys(map).length ? 'live' : 'empty';
+    try{ localStorage.setItem('sharp_odds_'+sport+'_v3',JSON.stringify({ts:Date.now(),map})); }catch(e){}
+  }catch(e){ SHARP_STATUS='error'; console.warn('sharp odds fetch failed:',e.message); }
 }
 
 // Cost to BUY each side's YES contract on Kalshi (dollars 0–1).
@@ -3499,19 +3520,26 @@ function cardCandidates(){
   // cross-book: two independent de-vigged quotes on one game disagree.
   // Skipped entirely when the Kalshi snapshot is stale, because then a "gap"
   // is just the clock, and betting it is betting on old news.
+  // The odds proxy caches 60s server-side, so there is no multi-minute snapshot
+  // to go stale the way the old one did. Kept as a guard for any future feed
+  // that does report an age.
   const ageMin=kalshiAgeMin();
-  const kalshiFresh = (ageMin==null) || (ageMin<=CARD_MAX_STALE_MIN);
-  // Cross-book needs TWO independent prices. Kalshi was the second one, so
-  // fairKalshi is now always null and this loop yields nothing. Left intact:
-  // it is source-agnostic and revives if a second feed is ever added.
-  for(const row of (kalshiFresh?[...FV_ROWS.mlb,...FV_ROWS.wnba]:[])){
-    const k=row.fairKalshi, bk=row.fairBook;
-    if(k==null||bk==null) continue;
-    // Buy from whichever venue prices the side lower, valued at the other's fair.
-    if(bk>k) add(row.league,row,true, bk,k,'CROSS','Kalshi cheap vs book');
-    else if(k>bk) add(row.league,row,true, k,bk,'CROSS','Book cheap vs Kalshi',row.bookHomeML);
-    if((1-bk)>(1-k)) add(row.league,row,false, 1-bk,1-k,'CROSS','Kalshi cheap vs book');
-    else if((1-k)>(1-bk)) add(row.league,row,false, 1-k,1-bk,'CROSS','Book cheap vs Kalshi',row.bookAwayML);
+  // PRICE vs SHARP REFERENCE. This used to be a symmetric "buy from whichever
+  // venue is cheap" comparison, which only made sense when both venues were
+  // bettable. Bets are placed on DraftKings, so the comparison is now
+  // one-directional and the roles are fixed:
+  //     fair  = the sharp reference (Pinnacle if available, else the multi-book
+  //             median) — what the game is actually worth
+  //     price = DraftKings — what you will actually pay
+  // Comparing DraftKings against itself can never show an edge, which is the
+  // state this page was in with a single source.
+  for(const row of [...FV_ROWS.mlb,...FV_ROWS.wnba]){
+    const sharp=row.fairSharp, bk=row.fairBook;
+    if(sharp==null||bk==null) continue;
+    const note=(row.sharpIsPinnacle?'Pinnacle':`${row.sharpBooks||0}-book`)+' vs DraftKings';
+    // Home side: worth `sharp`, priced at `bk`. Only a bet when DK is cheaper.
+    if(sharp>bk) add(row.league,row,true, sharp,bk,'CROSS',note,row.bookHomeML);
+    if((1-sharp)>(1-bk)) add(row.league,row,false, 1-sharp,1-bk,'CROSS',note,row.bookAwayML);
   }
 
   // model plays: only where weight was earned against the price
@@ -4828,7 +4856,7 @@ async function load(){
           league:'WNBA', home:g.homeAbbr, away:g.awayAbbr,
           start:g.gameDate?Date.parse(g.gameDate):null,
           fairHome:dv[0], source:'DraftKings (de-vigged)',
-          fairBook:dv[0], fairKalshi:kHome,
+          fairBook:dv[0], fairSharp:null,   // WNBA sharp feed arrives with the Odds API key
           bookHomeML:g.inlineOdds.homeML, bookAwayML:g.inlineOdds.awayML,
           spreadLine:sp?g.spread.home.line:null, spreadFairHome:sp?sp[0]:null,
         });
