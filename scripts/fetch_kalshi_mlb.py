@@ -8,8 +8,9 @@ import json, os, urllib.request
 from datetime import datetime, timezone
 
 BASE = "https://api.elections.kalshi.com/trade-api/v2"
-# KXMLBGAME = single-game moneyline, KXMLBF5 = first-5-innings 3-way
-SERIES = ["KXMLBGAME", "KXMLBF5"]
+# KXMLBGAME = single-game moneyline. The first-5-innings series was dropped
+# on 2026-08-11 along with the F5 model it fed.
+SERIES = ["KXMLBGAME"]
 KEEP = ["ticker","event_ticker","title","yes_sub_title","no_sub_title",
         "yes_bid_dollars","yes_ask_dollars","no_bid_dollars","no_ask_dollars",
         "last_price_dollars","close_time"]

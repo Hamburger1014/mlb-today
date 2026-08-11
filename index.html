@@ -679,7 +679,7 @@
   </main>
 </div>
 
-<footer>MLB Today · MLB Stats API + ESPN · Kalshi Markets · Consensus blends model (20–25%) + Vegas (50%) + ESPN (30%) · Model: logistic regression trained on 7,300 real MLB games 2022–24 (56.6% walk-forward; 60–66% on confident picks) + Platt auto-calibration · Features: Pythagorean, win%, run-diff, starting-pitcher ERA, home edge · ROI engine: 9-book devigged fair value vs Kalshi price, fee-aware EV + ¼-Kelly stake · First-5-Innings model is paper-only (reference): its forward log returned a negative ROI that worsened as its claimed edge grew, so its signals are tracked, not bet</footer>
+<footer>MLB Today · MLB Stats API + ESPN · Kalshi Markets · Consensus blends model (20–25%) + Vegas (50%) + ESPN (30%) · Model: logistic regression trained on 7,300 real MLB games 2022–24 (56.6% walk-forward; 60–66% on confident picks) + Platt auto-calibration · Features: Pythagorean, win%, run-diff, starting-pitcher ERA, home edge · Value engine: fair value is the model shrunk toward the de-vigged Kalshi price, fee-aware EV + ¼-Kelly stake, capped for correlated exposure · Measured against the closing price over 134 replayed games: the model does not beat it, so these are predictions, not bets</footer>
 
 <script>
 // ═══════════════════════════════════════════════════════════════
@@ -1409,82 +1409,6 @@ function projectScore(homeAbbr,awayAbbr,homeKBBq=null,awayKBBq=null,p=null){
   return { home:Math.max(0.5,s.home), away:Math.max(0.5,s.away) };
 }
 
-// ── FIRST 5 INNINGS (F5) MODEL — 3-way: home leads / tie / away leads ─────
-//   BACKTESTED on 7,298 real games 2022-24 (per-inning linescores). Beats the
-//   naive base-rate out-of-sample in both 2023 & 2024 (log-loss 1.014→1.005 and
-//   1.004→0.996; acc 44.5→47.2% and 45.2→47.7%). F5 is starter-driven (bullpens
-//   barely pitch), so it leans on K-BB% with NO bullpen term.
-//   Expected F5 runs per team = (offense R/G, shrunk) × 5/9 × oppSP factor × scale;
-//   home gets a small bump. Poisson runs each side → convolve for the 3 outcomes.
-//   RUN DISTRIBUTION — NEGATIVE BINOMIAL, not Poisson. Measured on 3,929 real
-//   F5 linescores (2025 + 2026): var/mean = 2.19 home / 2.25 away, so runs are
-//   ~2.2x overdispersed and Poisson is far too narrow. Poisson clusters the two
-//   scores together and OVERSTATED ties by +2.44pp (18.22% vs 15.78% actual),
-//   which fed straight into the "Tie F5" value plays — those were structurally
-//   -EV. NB(mean, disp) has var = mean*(1+mean/disp); disp=4.0 fits the observed
-//   3-way split to within 0.001 on all three outcomes.
-//   Honest out-of-sample check: fitting disp on 2025 alone and testing on 2026
-//   cut the tie error 82% (+0.0257 -> +0.0046) and improved log-loss
-//   (1.01905 -> 1.01644). Calibration script: wnba_model/calibrate_f5.py.
-const F5_MODEL = { beta:1.5, homeBump:1.06, scale:1.15, disp:4.0 };
-function _poisPmf(lam, kmax=14){
-  lam=Math.max(0.05,lam); const out=new Array(kmax+1); let t=Math.exp(-lam); out[0]=t;
-  for(let k=1;k<=kmax;k++){ t*=lam/k; out[k]=t; } return out;
-}
-// Negative binomial pmf by mean + dispersion r (var = mean*(1+mean/r)).
-// r -> infinity recovers Poisson.
-function _nbPmf(mean, r=F5_MODEL.disp, kmax=20){
-  mean=Math.max(0.05,mean);
-  const p=r/(r+mean), out=new Array(kmax+1);
-  let v=Math.pow(p,r); out[0]=v;
-  for(let k=1;k<=kmax;k++){ v*=((k+r-1)/k)*(1-p); out[k]=v; }
-  return out;
-}
-// Convolve two independent pmfs (needed for the F5 total: two NBs with
-// different means do NOT sum to a single NB, unlike the Poisson case).
-function _convolve(a, b){
-  const out=new Array(a.length+b.length-1).fill(0);
-  for(let i=0;i<a.length;i++) for(let j=0;j<b.length;j++) out[i+j]+=a[i]*b[j];
-  return out;
-}
-// Returns {h: P(home leads after 5), t: P(tie), a: P(away leads)} or null.
-// Stat-object form — takes team stat objects directly (used by the season replay,
-// which walks a point-in-time accumulator rather than the live teamStats map).
-function f5ProbsStats(h, a, homeKBBq, awayKBBq){
-  if(!h||!a) return null;
-  const hg=h.wins+h.losses, ag=a.wins+a.losses; if(hg<1||ag<1) return null;
-  const lg=leagueRPG();
-  const hoff=(h.rs+lg*15)/(hg+15), aoff=(a.rs+lg*15)/(ag+15);       // offense shrunk to lg (k=15)
-  const lk=REAL_MODEL.kbbLg;
-  const spf=q=> (q==null)?1:Math.max(0.55,Math.min(1.5, 1 - F5_MODEL.beta*(q-lk)));  // better SP → fewer runs
-  const lamH=Math.max(0.15, hoff*(5/9)*spf(awayKBBq)*F5_MODEL.homeBump*F5_MODEL.scale);
-  const lamA=Math.max(0.15, aoff*(5/9)*spf(homeKBBq)*F5_MODEL.scale);
-  const ph=_nbPmf(lamH), pa=_nbPmf(lamA);
-  let H=0,T=0,A=0;
-  for(let i=0;i<ph.length;i++) for(let j=0;j<pa.length;j++){ const p=ph[i]*pa[j]; if(i>j)H+=p; else if(i===j)T+=p; else A+=p; }
-  const s=H+T+A||1; return {h:H/s, t:T/s, a:A/s};
-}
-function f5Probs(homeAbbr, awayAbbr, homeKBBq, awayKBBq){
-  return f5ProbsStats(teamStats[homeAbbr], teamStats[awayAbbr], homeKBBq, awayKBBq);
-}
-// F5 TOTALS — expected first-5-innings total + P(over line). The two sides' F5
-// run counts are independent Poissons, so the F5 total is Poisson(lamH+lamA) —
-// exact, no convolution needed. Surfaces the F5 O/U (Kalshi KXMLBF5TOTAL, ~4.5).
-function f5Totals(homeAbbr, awayAbbr, homeKBBq, awayKBBq){
-  const h=teamStats[homeAbbr], a=teamStats[awayAbbr]; if(!h||!a) return null;
-  const hg=h.wins+h.losses, ag=a.wins+a.losses; if(hg<1||ag<1) return null;
-  const lg=leagueRPG();
-  const hoff=(h.rs+lg*15)/(hg+15), aoff=(a.rs+lg*15)/(ag+15);
-  const lk=REAL_MODEL.kbbLg;
-  const spf=q=> (q==null)?1:Math.max(0.55,Math.min(1.5, 1 - F5_MODEL.beta*(q-lk)));
-  const lamH=Math.max(0.15, hoff*(5/9)*spf(awayKBBq)*F5_MODEL.homeBump*F5_MODEL.scale);
-  const lamA=Math.max(0.15, aoff*(5/9)*spf(homeKBBq)*F5_MODEL.scale);
-  // Two NBs with different means don't sum to a single NB, so convolve.
-  const pmf=_convolve(_nbPmf(lamH), _nbPmf(lamA));
-  const pOver=line=>{ let p=0; for(let k=Math.ceil(line);k<pmf.length;k++) p+=pmf[k]; return p; };
-  return { total:lamH+lamA, over35:pOver(3.5), over45:pOver(4.5), over55:pOver(5.5) };
-}
-
 // ── WEATHER-AWARE TOTAL (dedicated model v2) ──────────────────────────────
 //   Predicts the GAME TOTAL from team off/def rates, park, both starters'
 //   K-BB%, live temp+wind, combined BULLPEN ERA, and combined starter avg-outs.
@@ -1620,24 +1544,22 @@ function modelConfidence(p){
 }
 
 // ── Log today's predictions (call after computing modelP) ────────
-function nnLogPrediction(gamePk,rawP,homeAbbr,awayAbbr,projTotal,ouLine,f5p){
+function nnLogPrediction(gamePk,rawP,homeAbbr,awayAbbr,projTotal,ouLine){
   if(!gamePk) return;
   if(STATS_DEGRADED) return;   // don't pollute the record/calibration with zeroed-feature (fallback) predictions
   const pt=(projTotal!=null&&!isNaN(projTotal))?+(+projTotal).toFixed(2):null;
   const ol=(ouLine!=null&&!isNaN(ouLine))?+ouLine:null;
-  const f5=(f5p&&f5p.h!=null)?{h:+f5p.h.toFixed(4),t:+f5p.t.toFixed(4),a:+f5p.a.toFixed(4)}:null;
   const ex=nnGameLog.find(e=>e.id==gamePk);
   if(ex){ // already logged — backfill fields if they were missing
     let ch=false;
     if(ex.projTotal==null&&pt!=null){ ex.projTotal=pt; ch=true; }
     if(ex.ouLine==null&&ol!=null){ ex.ouLine=ol; ch=true; }
-    if(ex.f5p==null&&f5!=null){ ex.f5p=f5; ch=true; }
     if(ch){ try{localStorage.setItem(NN_LOG_KEY,JSON.stringify(nnGameLog));}catch(e){} }
     return;
   }
   const today=new Date().toISOString().slice(0,10);
   nnGameLog=nnGameLog.filter(e=>e.date>=(today.slice(0,7)+'-01')).slice(-200);
-  nnGameLog.push({id:gamePk,rawP,homeAbbr,awayAbbr,date:today,result:null,projTotal:pt,ouLine:ol,f5p:f5});
+  nnGameLog.push({id:gamePk,rawP,homeAbbr,awayAbbr,date:today,result:null,projTotal:pt,ouLine:ol});
   try{localStorage.setItem(NN_LOG_KEY,JSON.stringify(nnGameLog));}catch(e){}
 }
 
@@ -1746,46 +1668,8 @@ function renderCalibrationPanel(){
     <div class="tr-foot">Reliability diagram: each dot is a confidence band — x = model confidence, y = how often those picks actually won; bigger dots = more games. On the dashed line = perfectly calibrated · above = under-confident · below = over-confident. Point-in-time season replay (no lookahead).</div>
   </div>`;
 }
-// F5 LIVE track record — forward-logged F5 3-way predictions graded from real
 // first-5-innings results (pooled reliability, like the WC panel). Accrues as
 // today's games finish; independent of the season replay in loadModelRecords.
-function _f5CalibLive(){
-  const g=nnGameLog.filter(e=>e.f5p && e.f5act);
-  if(!g.length) return null;
-  const key={H:'h',T:'t',A:'a'};
-  const pts=[]; let acc=0, ll=0;
-  for(const e of g){ const pr=e.f5p;
-    pts.push({p:pr.h,hit:e.f5act==='H'?1:0},{p:pr.t,hit:e.f5act==='T'?1:0},{p:pr.a,hit:e.f5act==='A'?1:0});
-    const pick=[['H',pr.h],['T',pr.t],['A',pr.a]].reduce((m,x)=>x[1]>m[1]?x:m)[0];
-    if(pick===e.f5act) acc++;
-    ll+=-Math.log(Math.max(1e-6, pr[key[e.f5act]]??1e-6));
-  }
-  const edges=[0,0.1,0.2,0.3,0.4,0.55,1.001]; const buckets=[];
-  for(let i=0;i<edges.length-1;i++){ const lo=edges[i],hi=edges[i+1];
-    const inB=pts.filter(x=>x.p>=lo&&x.p<hi);
-    if(!inB.length){ buckets.push({lo,hi,n:0,conf:(lo+hi)/2,acc:null}); continue; }
-    buckets.push({lo,hi,n:inB.length,conf:inB.reduce((s,x)=>s+x.p,0)/inB.length,acc:inB.reduce((s,x)=>s+x.hit,0)/inB.length});
-  }
-  const N=pts.length; let ece=0,brier=0;
-  for(const b of buckets){ if(b.n) ece+=(b.n/N)*Math.abs(b.conf-b.acc); }
-  for(const x of pts){ brier+=Math.pow(x.p-x.hit,2); }
-  return {buckets,N,games:g.length,ece,brier:N?brier/N:0,acc:acc/g.length,ll:ll/g.length};
-}
-function renderF5LivePanel(){
-  const c=_f5CalibLive();
-  if(!c) return `<div class="tr-wrap"><div class="tr-head">&#x26BE; First 5 Innings — live track record</div><div class="tr-empty">No F5 predictions graded yet. Each game's F5 3-way pick is auto-logged and graded from the real first-5-innings result as games finish. Backtest baseline: ~47% correct (3-way; ~44% naive base rate), better log-loss.</div></div>`;
-  return `<div class="tr-wrap">
-    <div class="tr-head">&#x26BE; First 5 Innings — live track record <span class="tr-sub">${c.games} graded · auto-updated from real F5 results</span></div>
-    <div class="tr-kpis">
-      <div class="tr-kpi"><div class="tr-big">${Math.round(c.acc*100)}%</div><div class="tr-lbl">F5 leader called (3-way)</div></div>
-      <div class="tr-kpi"><div class="tr-big">${c.ll.toFixed(3)}</div><div class="tr-lbl">Log-loss (lower better)</div></div>
-      <div class="tr-kpi"><div class="tr-big ${c.ece<=0.06?'tr-good':''}">${(c.ece*100).toFixed(1)}%</div><div class="tr-lbl">Calibration error (ECE)</div></div>
-    </div>
-    ${renderCalibrationSVG(c,{x0:0,x1:1,y0:0,y1:1,ticks:[0,0.25,0.5,0.75,1],xlab:'Predicted probability',ylab:'Observed frequency'})}
-    <div class="tr-foot">Each game contributes its home-lead / tie / away-lead probabilities (3 points): x = predicted, y = how often it actually happened. On the dashed line = calibrated. The live forward test of the headline F5 model.</div>
-  </div>`;
-}
-
 // ── LIVE TRACK RECORD — built from logged predictions + real results ─────────
 // Uses the calibrated prob (plattScale) for the pick; buckets by confidence so
 // you can see whether confident picks really hit harder, live (not just backtest).
@@ -1795,7 +1679,7 @@ function buildTrackRecord(){
   if(labeled.length<1){
     el.innerHTML=`<div class="tr-wrap"><div class="tr-head">📈 Live Track Record</div>
       <div class="tr-empty">No graded games yet. The model auto-logs each day's picks and grades them from real final scores — check back after games finish. (Backtest baseline: 57% overall, 60–66% on confident picks.)</div></div>
-      ${renderCalibrationPanel()}${renderF5LivePanel()}`;
+      ${renderCalibrationPanel()}`;
     return;
   }
   const pick=e=>plattScale(e.rawP)>=0.5?1:0;
@@ -1830,7 +1714,7 @@ function buildTrackRecord(){
     })()}
     <div class="tr-foot">Pick = calibrated model favorite. Buckets show whether confidence translates to live accuracy. Backtest: ~57% overall, 60–66% confident. <b>O/U</b> is forward-tested here (proj total vs the DraftKings line vs the real result) and only promoted to Best Bets once it shows a real edge over ≥20 leans. Sample grows daily.</div>
   </div>
-  ${renderCalibrationPanel()}${renderF5LivePanel()}`;
+  ${renderCalibrationPanel()}`;
 }
 
 // ── Log result and update UI ──────────────────────────────────────
@@ -2437,33 +2321,10 @@ async function fetchKalshiMarkets(){
   return events;
 }
 
-// First-5-innings markets: Kalshi series KXMLBF5 (3-way — each team + Tie).
 // Single high-limit call (like the WC fix). Normalize yes_sub_title
 // ("Atlanta wins first 5 innings" → "Atlanta") so kalshiMktForTeam matches; tag Tie.
-async function fetchKalshiF5(){
-  const now=Math.floor(Date.now()/1000);
-  const CK='kxmlbf5';
-  const fresh=_kCacheGet(CK,75000);
-  if(fresh) return fresh;
-  let d=null;
-  for(let i=0;i<2 && !d;i++){   // gentle: 1 retry (was 3 — rapid retries worsened the rate-limit)
-    try{ d=await kalshiPublicFetch(`/markets?series_ticker=KXMLBF5&status=open&min_close_ts=${now}&limit=1000`); }
-    catch(e){ d=null; if(i<1) await new Promise(r=>setTimeout(r,700)); }
-  }
-  if(!d){ const stale=_kCacheGetStale(CK); return stale||[]; }
-  const byEv={};
-  for(const m of (d.markets||[])){
-    const et=m.event_ticker; if(!et) continue;
-    const sub=(m.yes_sub_title||'');
-    const norm = /tie/i.test(sub) ? 'TIE' : sub.replace(/\s*wins first 5 innings/i,'').trim();
-    (byEv[et]=byEv[et]||{event_ticker:et, markets:[]}).markets.push({...m, yes_sub_title:norm});
-  }
-  const events=Object.values(byEv);
-  if(events.length) _kCacheSet('kxmlbf5', events);
-  return events;
-}
 /* ═══ MARKET DISCIPLINE ══════════════════════════════════════════════════
-   Measured 2026-08-09 — scripts/market_edge_test.py (120 MLB F5 games) and
+   Measured 2026-08-09 — scripts/market_edge_test.py, scripts/mlb_fullgame_test.py and
    wnba_model/wnba_backfill.py (214 backfilled 2026 WNBA games).
 
    The benchmark is the de-vigged market price, not the base rate. A model can
@@ -2475,10 +2336,10 @@ async function fetchKalshiF5(){
       of the raw model. Without it the engine holds its own probability fixed
       while the price moves, so a market moving AGAINST a pick makes that side
       cheaper and the displayed edge GROWS — the engine selects for its own
-      errors. Measured on F5 flags: +7.7pp claimed edge, −6.7pp realised.
+      errors. Measured on live flags: +7.7pp claimed edge, −6.7pp realised.
    2. MOVED-AGAINST VETO. A price moving away from a pick is information
       arriving, not value appearing. Kill the flag instead of upgrading it.
-   3. CORRELATED EXPOSURE. F5 winner, game winner, spread and total on one game
+   3. CORRELATED EXPOSURE. Moneyline, spread and total on one game
       are a single underlying result. Sizing them independently multiplies one
       position, so total stake is capped per game and per day.
 
@@ -2486,7 +2347,6 @@ async function fetchKalshiF5(){
    measurement. w = 0 means "the model adds nothing here", which is not an
    opinion — it is what 120 games said. */
 const MARKET_EVIDENCE = {
-  MLBF5:  {bet:false, w:0.00, why:'REFUTED 2026-08-09 on 120 games. Model log-loss 1.0137 vs market 0.9889 — and vs 0.9912 for simply quoting the base rate. CLV −0.87pp (z=−2.65 clustered by date), flagged plays 14–38, −25% ROI.'},
   MLBGAME:{bet:false, w:0.00, why:'MEASURED 2026-08-09 on 134 replayed games (scripts/mlb_fullgame_test.py): β_model +0.16 (SE 0.84, z=0.19). Model log-loss 0.6824 vs 0.6728 for the Kalshi price; straight-up 58.2% vs the market\'s 60.4% (home base 56.0%). Pooling gains +0.0002 nats — nothing. No evidence of incremental information.'},
   WNBAML: {bet:true,  w:0.15, why:'Unproven, not refuted. 214 backfilled games: β_model +0.35 (p=0.29) with a lookahead injury feature, +0.07 (p=0.87) without it. Live sits between the two, so w is set near the honest end.'},
   WNBASP: {bet:true,  w:0.40, why:'Best segment measured: model ATS 56.5% vs 52.4% break-even (p=0.095), optimal shrink 0.37–0.45. Still unproven — needs ~583 bets for 2σ, so CLV decides it, not P&L.'},
@@ -2549,67 +2409,6 @@ function capExposure(plays,stakeOf,gameOf){
 function breakEvenAmerican(p){
   if(p==null||p<=0||p>=1) return null;
   return p>=0.5 ? -Math.round(100*p/(1-p)) : Math.round(100*(1-p)/p);
-}
-
-// 3-way de-vigged F5 market probs + raw asks from a matched KXMLBF5 event.
-function f5Market(ev, homeName, awayName){
-  if(!ev) return null;
-  const hm=kalshiMktForTeam(ev.markets, homeName), am=kalshiMktForTeam(ev.markets, awayName);
-  const tm=(ev.markets||[]).find(m=>m.yes_sub_title==='TIE');
-  if(!hm||!am||!tm) return null;
-  const mid=m=>{ const b=marketBidAsk(m); return (b.bid!=null&&b.ask!=null)?(b.bid+b.ask)/2:null; };
-  const mh=mid(hm), ma=mid(am), mt=mid(tm);
-  if(mh==null||ma==null||mt==null) return null;
-  const s=mh+ma+mt; if(s<=0) return null;
-  // Power de-vig rather than proportional: the tie is the cheap leg, and
-  // proportional systematically inflates it — the same direction as the
-  // Poisson bias that used to make every tie look like a bet.
-  const dv=devigPower([mh,mt,ma]) || [mh/s,mt/s,ma/s];
-  return {h:dv[0], t:dv[1], a:dv[2],
-    askH:marketBidAsk(hm).ask, askA:marketBidAsk(am).ask, askT:marketBidAsk(tm).ask,
-    bidH:marketBidAsk(hm).bid, bidA:marketBidAsk(am).bid, bidT:marketBidAsk(tm).bid,
-    event:ev.event_ticker};
-}
-// Best +EV F5 outcome: model prob vs Kalshi ask, fee-aware. STRICTER thresholds
-// than full-game (no sharp-book confirmation exists for the F5 market).
-function f5Evaluate(model, mkt, homeAbbr, awayAbbr, gamePk){
-  if(!model||!mkt) return null;
-  const EV=MARKET_EVIDENCE.MLBF5;
-  const sides=[
-    {key:'home', pick:homeAbbr+' F5', raw:model.h, mkt:mkt.h, price:mkt.askH, bid:mkt.bidH},
-    {key:'away', pick:awayAbbr+' F5', raw:model.a, mkt:mkt.a, price:mkt.askA, bid:mkt.bidA},
-    {key:'tie',  pick:'Tie F5',       raw:model.t, mkt:mkt.t, price:mkt.askT, bid:mkt.bidT},
-  ];
-  let best=null;
-  for(const s of sides){
-    if(s.price==null||isNaN(s.price)||s.price<=0.02||s.price>=0.98) continue;
-    // This card is a MEASUREMENT INSTRUMENT, not a bet slip, so the signal is
-    // still computed off the raw model — shrinking it to w=0 would silence the
-    // very disagreement we are tracking. `fairBlended` shows how much of the
-    // claimed edge survives shrinkage, which is the whole lesson in one number.
-    s.fair=s.raw;
-    s.fairBlended=blendFair(s.raw, s.mkt, EV.w);
-    const fee=KALSHI_FEE*s.price*(1-s.price);
-    const netEV=s.fair-s.price-fee, roi=netEV/s.price;
-    if(netEV>=0.025 && roi>=0.05){
-      const kelly=Math.max(0,(s.fair-s.price)/(1-s.price));
-      const stakeFrac=Math.min(0.05, KELLY_FRACTION*kelly);
-      // Maker fee is 25% of taker on Kalshi and 0 on most non-marquee markets.
-      // At 50c that is 1.75c vs ~0.44c — more than half of the 2.5c EV floor.
-      // If this market is ever re-enabled, post a resting limit; don't take.
-      const maker=(s.bid!=null&&s.bid>0)?Math.min(s.price, s.bid+0.01):null;
-      // A price that has moved against this side since first sight is the market
-      // learning something we don't have — record it rather than reading it as
-      // a bigger edge.
-      const drift=marketDrift('f5:'+gamePk+':'+s.key, s.mkt);
-      if(!best||netEV>best.netEV) best={...s, fee, netEV, roi, stakeFrac, maker,
-        movedAgainst:drift>MOVE_VETO,
-        netEVBlended:s.fairBlended-s.price-fee,
-        makerEV:maker!=null?(s.fair-maker-0.25*KALSHI_FEE*maker*(1-maker)):null};
-    }
-  }
-  if(best) best.bettable = EV.bet;   // false — see MARKET_EVIDENCE.MLBF5
-  return best;
 }
 
 // Find the Kalshi market in an event whose team (yes_sub_title, e.g. "Los Angeles D")
@@ -2706,7 +2505,7 @@ function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;'
 // ═══════════════════════════════════════════════════════════════
 function renderGame(game, extras){
   const {homeId,awayId,homeAbbr,awayAbbr,homeName,awayName,gameTime,status} = game;
-  const {espnGame, odds, odds2, predictor, kalshiEvent, kalshiF5Event, injuries} = extras;
+  const {espnGame, odds, odds2, predictor, kalshiEvent, injuries} = extras;
 
   // Log Result row — declared early (used later in card-detail template)
   const _logEntry = nnGameLog.find(x=>String(x.id)===String(game.gamePk));
@@ -2743,22 +2542,6 @@ function renderGame(game, extras){
   if(hInjPre.length>0 || aInjPre.length>0){
     modelHomeP = injuryAdjProb(modelHomeP, hInjPre, aInjPre);
   }
-  // FIRST 5 INNINGS (F5) — the headline prediction now. 3-way: home/tie/away leads after 5.
-  const f5 = f5Probs(homeAbbr, awayAbbr, homeKBBq, awayKBBq);   // {h,t,a} or null
-  const f5tot = f5 ? f5Totals(homeAbbr, awayAbbr, homeKBBq, awayKBBq) : null;   // F5 O/U model
-  // F5 market (Kalshi KXMLBF5, 3-way) + model value play vs the ask
-  const f5mkt = f5Market(kalshiF5Event, homeName, awayName);    // {h,t,a,askH,askA,askT} or null
-  const f5bet = (f5 && f5mkt) ? f5Evaluate(f5, f5mkt, homeAbbr, awayAbbr, game.gamePk) : null;
-  // Paper only — MARKET_EVIDENCE.MLBF5.bettable is false. These rows keep
-  // accruing so the closing-line record can settle the re-entry question; they
-  // are deliberately never sized or recommended.
-  if(f5bet && (!game.live || game.live.homeScore==null)){
-    BEST_BETS.push({matchup:`${awayAbbr}@${homeAbbr}`, pick:f5bet.pick, fair:f5bet.fair,
-      shrunk:f5bet.netEVBlended, movedAgainst:f5bet.movedAgainst,
-      price:f5bet.price, roi:f5bet.roi, stakeFrac:f5bet.stakeFrac, f5:true});
-    logBet('mlbf5:'+game.gamePk+':'+f5bet.key, {league:'MLBF5', date:new Date().toISOString().slice(0,10),
-      matchup:`${awayAbbr}@${homeAbbr}`, pick:f5bet.pick, side:f5bet.key, price:f5bet.price});
-  }
   const pitcherAdjActive = modelResult.pitcherAdjActive;
   // Projected score — DERIVED from the win model so the projected winner always
   // matches the model pick (run total from the score environment, split by the
@@ -2785,7 +2568,7 @@ function renderGame(game, extras){
     ? `<div class="proj-score" title="Score split from the win model (favored team always higher); total from the weather-aware totals model${wxNote}. Not exact finals.">&#x1F52E; Projected: <b>${awayAbbr} ${proj.away.toFixed(1)} – ${proj.home.toFixed(1)} ${homeAbbr}</b> <span class="proj-tot">· total ${projTotal.toFixed(1)}</span>${leanHtml}</div>`
     : '';
   const parkAdjActive    = modelResult.parkAdjActive;
-  if(game.gamePk && modelResult.rawP!=null) nnLogPrediction(game.gamePk, modelResult.rawP, homeAbbr, awayAbbr, projTotal, ouLine, f5);
+  if(game.gamePk && modelResult.rawP!=null) nnLogPrediction(game.gamePk, modelResult.rawP, homeAbbr, awayAbbr, projTotal, ouLine);
 
   // (Injury adjustment already applied above so projectScore/consensus/value all
   //  use the same p — keeps the projected winner consistent with the pick.)
@@ -2851,16 +2634,19 @@ function renderGame(game, extras){
   const bet = _asks ? evaluateBet(modelHomeP, _asks, homeAbbr, awayAbbr) : null;
   const _isLive  = status==='Live' || status==='In Progress';
   const _isFinal = status==='Final';
-  // Log full-game flags to the same ledger F5 uses. These were being computed
+  // Log full-game flags so the headline model grades itself forward. These were
   // and shown (stake and all) but never recorded, so the full-game bet signal
-  // had no forward record at all — the exact blind spot that let F5 run at a
-  // negative ROI unnoticed. Now that full game is the headline model, it grades
-  // itself too. Pregame only; gradeBet fills the result from the real score.
+  // shown on every card but never recorded, so they had no forward record at
+  // all — the blind spot that let a refuted model run unnoticed. Pregame only;
+  // gradeBet fills the result from the real score.
   if(bet && !_isLive && !_isFinal){
     logBet('mlb:'+game.gamePk+':'+bet.team, {league:'MLB', date:new Date().toISOString().slice(0,10),
       matchup:`${awayAbbr}@${homeAbbr}`, pick:bet.team, side:bet.team===homeAbbr?'home':'away', price:bet.price});
+    BEST_BETS.push({matchup:`${awayAbbr}@${homeAbbr}`, pick:bet.team, team:bet.team,
+      fair:bet.fair, price:bet.price, ev:bet.netEV, roi:bet.roi,
+      kelly:bet.stakeFrac, gameId:game.gamePk});
   }
-  // (Removed `betBadgeHtml` — a per-card "F5 VALUE … stake x%" badge that was
+  // (Removed `betBadgeHtml` — a per-card value badge that was
   //  built here but never interpolated into any template, so it had silently
   //  rendered nothing for as long as it existed. Not re-wired: F5 is paper-only
   //  now, and a prominent per-card badge is the opposite of that. The signal
@@ -3044,49 +2830,6 @@ function renderGame(game, extras){
     </div>`;
   }
 
-  // ── FIRST 5 INNINGS — 3-way: away-lead / tie / home-lead ──
-  // Demoted from headline to below the consensus and sources on 2026-08-10. It
-  // led the card for two months, but it was measured and closed for betting
-  // (log-loss 1.0137 vs 0.9889 for the price and 0.9912 for the base rate; CLV
-  // −0.87pp at z=−2.65), so it has no business being the first thing you read.
-  // Rendered into a variable and interpolated further down rather than pushed
-  // straight onto `html`, which keeps the diff to the ordering.
-  let f5Html='';
-  if(f5){
-    const fa=Math.round(f5.a*100), ft=Math.round(f5.t*100), fh=Math.round(f5.h*100);
-    const f5HomeFav=f5.h>f5.a;
-    const f5Pick = Math.abs(f5.h-f5.a)<0.04
-      ? `<span class="consensus-pick cp-even">Too Close</span>`
-      : `<span class="consensus-pick ${f5HomeFav?'cp-home':'cp-away'}">Favors ${f5HomeFav?homeAbbr:awayAbbr}</span>`;
-    f5Html = `
-    <div class="consensus-block" style="border-color:#3a6ea5;opacity:.8">
-      <div class="consensus-header">
-        <span class="consensus-title" style="color:var(--dim)">&#x26BE; First 5 Innings <span style="font-weight:400;opacity:.6;font-size:.6rem">paper only · lead / tie / lead</span></span>
-        ${f5Pick}
-      </div>
-      <div class="consensus-bar-row">
-        <div class="cb-abbr away">${awayAbbr}</div>
-        <div>
-          <div class="consensus-bar-track" style="display:flex">
-            <div style="width:${fa}%;background:linear-gradient(90deg,#b91c1c,#ef4444)"></div>
-            <div style="width:${ft}%;background:#5a6573"></div>
-            <div style="width:${fh}%;background:linear-gradient(90deg,#2563eb,#3b82f6)"></div>
-          </div>
-          <div class="consensus-vals"><span class="cv away">${fa}%</span><span style="color:var(--dim2);font-size:.72rem">Tie ${ft}%</span><span class="cv home">${fh}%</span></div>
-        </div>
-        <div class="cb-abbr home">${homeAbbr}</div>
-      </div>
-      ${f5tot?`<div style="margin-top:7px;font-size:.72rem;color:var(--dim2);display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
-        <span>&#x26BE; F5 total (model): <b style="color:#93c5fd">${f5tot.total.toFixed(1)}</b></span>
-        <span>Over 3.5 <b>${Math.round(f5tot.over35*100)}%</b> · 4.5 <b>${Math.round(f5tot.over45*100)}%</b> · 5.5 <b>${Math.round(f5tot.over55*100)}%</b></span>
-      </div>`:''}
-      ${f5mkt?`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:8px;font-size:.72rem">
-        <span style="color:#c084fc">&#x26A1; Kalshi F5 <b>${Math.round(f5mkt.a*100)}</b>/${Math.round(f5mkt.t*100)}/<b>${Math.round(f5mkt.h*100)}</b></span>
-        ${f5bet?`<span style="color:var(--green);font-weight:800">&#x1F3AF; ${f5bet.pick} @ ${Math.round(f5bet.price*100)}&cent; · +${(f5bet.roi*100).toFixed(0)}% ROI</span>`:`<span style="color:var(--dim2)">model agrees — no edge</span>`}
-      </div>`:`<div style="margin-top:6px;font-size:.7rem;color:var(--dim2)">&#x26A1; No Kalshi F5 market matched yet</div>`}
-    </div>`;
-  }
-
   html += `
     <div class="consensus-block">
       <div class="consensus-header">
@@ -3128,8 +2871,7 @@ function renderGame(game, extras){
         'linear-gradient(90deg,#4c1d95,#7c3aed)','linear-gradient(90deg,#3b0764,#a855f7)'):''}
     </div>
 
-    ${f5Html}
-
+    
     <div class="edge-row">
       <div class="edge-left">
         ${vegasOdds&&vegasOdds.overUnder?`<span class="edge-label">O/U:</span><span class="vol-badge">${vegasOdds.overUnder}</span>`:''}
@@ -3374,7 +3116,7 @@ function evaluateBet(fairHome, asks, homeAbbr, awayAbbr){
 // ═══════════════════════════════════════════════════════════════
 async function autoCalibrateFromResults(){
   const pending=nnGameLog.filter(e=>e.result==null && e.id>0);
-  const pendingBets=Object.values(betsLog).filter(b=>b.result==null && b.date && (b.league==='MLB'||b.league==='MLBF5'));
+  const pendingBets=Object.values(betsLog).filter(b=>b.result==null && b.date && (b.league==='MLB'));
   if(!pending.length && !pendingBets.length) return;
   const dates=[...pending.map(e=>e.date), ...pendingBets.map(b=>b.date)].filter(Boolean).sort();
   const end=new Date().toISOString().slice(0,10);
@@ -3400,10 +3142,7 @@ async function autoCalibrateFromResults(){
         if((g.status?.codedGameState)!=='F') continue;
         const hs=g.teams?.home?.score, as=g.teams?.away?.score;
         if(hs==null||as==null) continue;
-        const inn=g.linescore?.innings||[]; let f5=null;
-        if(inn.length>=5){ let fh=0,fa=0; for(let i=0;i<5;i++){ fh+=(inn[i].home?.runs||0); fa+=(inn[i].away?.runs||0); }
-          f5 = fh>fa?'H':(fa>fh?'A':'T'); }
-        finals[g.gamePk]={hw: hs===as?null:(hs>as?1:0), total:hs+as, f5};
+        finals[g.gamePk]={hw: hs===as?null:(hs>as?1:0), total:hs+as};
       }
     }
     let n=0, tot=0;
@@ -3411,19 +3150,16 @@ async function autoCalibrateFromResults(){
       const f=finals[e.id]; if(f==null||f.hw==null) continue;
       if(nnLogResult(e.id, f.hw===1)) n++;
       if(e.actualTotal==null){ e.actualTotal=f.total; tot++; }   // O/U forward-test
-      if(e.f5act==null && f.f5){ e.f5act=f.f5; tot++; }          // F5 forward-test — grade the F5 3-way pick
     }
     if(tot>0){ try{localStorage.setItem(NN_LOG_KEY,JSON.stringify(nnGameLog));}catch(e){} }
     // grade logged best bets from the same finals (realized ROI)
     for(const bid in betsLog){
       const b=betsLog[bid]; if(b.result!=null) continue;
       const f=finals[bid.split(':')[1]]; if(f==null) continue;
-      if(b.league==='MLBF5' && f.f5) gradeBet(bid,                                                 // first-5-innings
-        (b.side==='home'&&f.f5==='H')||(b.side==='away'&&f.f5==='A')||(b.side==='tie'&&f.f5==='T'));
       // Full-game flags are logged again as of Aug 7 2026, so this branch is
       // live. `side` is written as 'home'/'away' at log time; f.hw is 1 when the
       // home team won and null on a suspended/tied game, which we skip.
-      else if(b.league==='MLB' && f.hw!=null) gradeBet(bid,
+      if(b.league==='MLB' && f.hw!=null) gradeBet(bid,
         (b.side==='home'&&f.hw===1)||(b.side==='away'&&f.hw===0));
     }
     if(n>0) console.info(`Auto-calibrated on ${n} real result(s). Platt a=${NN_PLATT.a.toFixed(3)} b=${NN_PLATT.b.toFixed(3)}`);
@@ -3477,9 +3213,7 @@ async function loadModelRecords(){
       const hAb=teamById[ht.team?.id]?.abbr, aAb=teamById[at.team?.id]?.abbr;
       if(!hAb||!aAb) continue;
       // Actual first-5-innings leader (for the F5 headline record) from the linescore.
-      let f5a=null; const inn=g.linescore?.innings||[];
-      if(inn.length>=5){ let fh=0,fa=0; for(let i=0;i<5;i++){ fh+=(inn[i].home?.runs||0); fa+=(inn[i].away?.runs||0); } f5a=fh>fa?'H':(fa>fh?'A':'T'); }
-      games.push({date:day.date,h:hAb,a:aAb,hs,as,hpid:ht.probablePitcher?.id,apid:at.probablePitcher?.id,f5a});
+      games.push({date:day.date,h:hAb,a:aAb,hs,as,hpid:ht.probablePitcher?.id,apid:at.probablePitcher?.id});
     }
     if(!games.length){ el.style.display='none'; return; }
     games.sort((x,z)=> x.date<z.date?-1 : x.date>z.date?1 : 0);
@@ -3488,7 +3222,7 @@ async function loadModelRecords(){
     await fetchStarterKBB(pids);
     // Chronological walk — predict each game from prior games only
     const ST={}; const get=ab=> ST[ab]||(ST[ab]={wins:0,losses:0,rs:0,ra:0});
-    const graded=[], gradedF5=[];
+    const graded=[];
     for(const g of games){
       const H=get(g.h), A=get(g.a), hw=g.hs>g.as?1:0;
       if(H.wins+H.losses>=15 && A.wins+A.losses>=15){
@@ -3497,10 +3231,6 @@ async function loadModelRecords(){
         // homeWon is carried so the naive "always pick home" baseline can be
         // measured from this same replay rather than hard-coded.
         if(p!=null) graded.push({date:g.date,correct:((p>=0.5)===(hw===1)),conf:Math.max(p,1-p),homeWon:hw===1});
-        // F5 headline model — did it call the first-5-innings leader (3-way)?
-        if(g.f5a){ const p5=f5ProbsStats(H,A,kh,ka);
-          if(p5){ const pick=[['H',p5.h],['T',p5.t],['A',p5.a]].reduce((m,x)=>x[1]>m[1]?x:m)[0];
-            gradedF5.push({date:g.date, correct:pick===g.f5a, act:g.f5a}); } }
       }
       if(hw){H.wins++;A.losses++;}else{H.losses++;A.wins++;}
       H.rs+=g.hs;H.ra+=g.as;A.rs+=g.as;A.ra+=g.hs;
@@ -3527,17 +3257,9 @@ async function loadModelRecords(){
     const fgPct  = sT.n ? Math.round(sT.w/sT.n*100) : 0;
     const fgEdge = fgPct - fgBase;
 
-    const f5y=tally(gradedF5.filter(x=>x.date===ystr)), f5w=tally(gradedF5.filter(x=>x.date>=w7str)), f5s=tally(gradedF5);
-    const f5base = f5s.n ? Math.round(gradedF5.filter(x=>x.act==='H').length/f5s.n*100) : 45;
-    const f5pct  = f5s.n ? Math.round(f5s.w/f5s.n*100) : 0;
-    const f5edge = f5pct - f5base;
-
     // Full game is the HEADLINE model: it is the only one of the two that beats
     // its naive baseline by a margin the season replay can actually resolve.
     const line0=`&#x1F4CA; <b>Full-game model</b> <span style="color:#86efac">(headline)</span> &nbsp;·&nbsp; Yesterday ${fmt(yT)} &nbsp;·&nbsp; Last 7d ${fmt(wT)} &nbsp;·&nbsp; Season ${fmt(sT)} <span style="color:${fgEdge>=0?'#86efac':'#f87171'}">— ${fgEdge>=0?'+':''}${fgEdge} pts vs the ${fgBase}% home-team base rate</span>`;
-    const line1 = f5s.n
-      ? `&#x26BE; <b>First 5 Innings model</b> <span style="color:var(--dim2)">(reference · paper only)</span> &nbsp;·&nbsp; Yesterday ${fmt(f5y)} &nbsp;·&nbsp; Last 7d ${fmt(f5w)} &nbsp;·&nbsp; Season ${fmt(f5s)} <span style="color:${f5edge>=0?'var(--dim)':'#f87171'}">— ${f5edge>=0?'+':''}${f5edge} pts vs the ${f5base}% home-lead base rate</span>`
-      : '';
     const line2=`&#x1F3AF; <b>When confident</b> (full-game, season) &nbsp;·&nbsp; gave &ge;60% ${fmt(c60)} &nbsp;·&nbsp; gave &ge;70% ${fmt(c70)}`;
     // ── Collapsed headline + expandable detail ────────────────────────────────
     // The three full lines cost ~170px above the fold on a phone, which is most
@@ -3550,7 +3272,7 @@ async function loadModelRecords(){
         `<span class="rec-stat">${headStat}</span>`+
         `<span class="rec-more">▸ details</span>`+
       `</div>`+
-      `<div class="rec-detail" id="rec-detail" hidden>${(line0?line0+'<br>':'')+line1+'<br>'+line2}</div>`;
+      `<div class="rec-detail" id="rec-detail" hidden>${(line0?line0+'<br>':'')+line2}</div>`;
     el.innerHTML=html; el.style.display='block';
     wireRecordToggle();
     try{ localStorage.setItem(CK, JSON.stringify({date:ystr,html,calib:MODEL_CALIB})); }catch(e){}
@@ -3641,15 +3363,13 @@ async function init(){
   // Time-bound each: a slow/down endpoint (esp. the Kalshi worker proxy) must
   // never hang the whole render — the page shows whatever sources came back.
   const cap = (p, ms, fb) => Promise.race([p.catch(()=>fb), new Promise(r=>setTimeout(()=>r(fb), ms))]);
-  const [injuries, kalshiEvents, , , , , kalshiF5Events] = await Promise.all([
+  const [injuries, kalshiEvents] = await Promise.all([
     cap(fetchInjuries(), 10000, {}),
     cap(fetchKalshiMarkets(), 12000, []),
     cap(fetchSharpOdds(), 10000, undefined),
     cap(fetchStarterKBB(mlbGames.flatMap(g=>[g.homeSpId,g.awaySpId])), 10000, undefined),
     cap(fetchWeather(mlbGames), 10000, undefined),
     cap(fetchBullpen(), 10000, undefined),
-    cap(fetchKalshiF5(), 12000, []),
-    cap(loadF5ServerLog(), 8000, undefined),
   ]);
   stepDone('s4');
 
@@ -3668,18 +3388,6 @@ async function init(){
       const d=Math.abs(et-gt); if(d<bd){ bd=d; best=ev; }
     }
     kalshiMap[g.gamePk]=best||cands[0];
-  }
-  // Match each game to its KXMLBF5 (first-5-innings) event the same way
-  const kalshiF5Map={};
-  for(const g of mlbGames){
-    const cands=(kalshiF5Events||[]).filter(ev=>
-      kalshiMktForTeam(ev.markets, g.homeName) && kalshiMktForTeam(ev.markets, g.awayName));
-    if(!cands.length) continue;
-    const gt=Date.parse(g.gameTime)||Date.now();
-    let best=null, bd=Infinity;
-    for(const ev of cands){ const et=kalshiEventTime(ev); if(et==null) continue;
-      const d=Math.abs(et-gt); if(d<bd){ bd=d; best=ev; } }
-    kalshiF5Map[g.gamePk]=best||cands[0];
   }
 
   // ── Render ───────────────────────────────────────────────────────────────────
@@ -3743,7 +3451,6 @@ async function init(){
       odds2:       allOdds2[idx]||null,
       predictor:   allPredictors[idx],
       kalshiEvent: kalshiMap[g.gamePk]||null,
-      kalshiF5Event: kalshiF5Map[g.gamePk]||null,
       injuries:    injuries,
     });
     container.appendChild(card);
@@ -3842,25 +3549,6 @@ function wireGameControls(container, ctrls){
 // scheduled Action. The on-page "Realized" line above it comes from THIS
 // browser's localStorage and also blends bets made before the July-31 Poisson
 // fix; this line is browser-independent and post-fix only.
-let f5ServerLog=null;
-async function loadF5ServerLog(){
-  try{
-    const r=await fetch('data/mlb_f5_predictions.json?cb='+Date.now());
-    if(!r.ok) throw new Error('HTTP '+r.status);
-    f5ServerLog=await r.json();
-  }catch(e){ f5ServerLog=null; }
-}
-function f5ServerHtml(){
-  if(!f5ServerLog) return '';
-  const s=f5ServerLog.summary, acc=f5ServerLog.accuracy;
-  const n=(f5ServerLog.entries||[]).length;
-  const parts=[];
-  if(s&&s.n) parts.push(`flagged plays <b>${s.w}–${s.l}</b> · <b class="${s.profit>=0?'':'bb-warn'}">${s.profit>=0?'+':''}${s.profit.toFixed(2)}u</b> on ${s.risked.toFixed(2)} risked · ROI <b>${s.roi>=0?'+':''}${(s.roi*100).toFixed(0)}%</b>`);
-  if(acc&&acc.n) parts.push(`3-way calls ${acc.hit}/${acc.n} (${(acc.rate*100).toFixed(0)}%)`);
-  const body=parts.length?parts.join(' · '):'no graded games yet';
-  return `<div class="bb-foot">&#x1F310; Server log (post-fix, browser-independent): ${n} games logged · ${body}</div>`;
-}
-
 // Build the F5 signal strip from BEST_BETS, insert after the header.
 //
 // DEMOTED to paper-only (Aug 7 2026). The server-side forward log over 38 graded
@@ -3873,40 +3561,45 @@ function f5ServerHtml(){
 // itself — that is how the question gets settled — but stake sizing is gone and
 // nothing here is presented as a bet to place.
 function renderBestBets(container, hdr){
-  const valuePlays = BEST_BETS.filter(b=>!b.totals).sort((a,b)=>b.roi-a.roi);
+  // Same component the WNBA view uses: matchup, market chip, pick, EV, fair
+  // probability, the worst price still worth taking, and a quarter-Kelly stake
+  // capped for correlated exposure. Sourced from the full-game value engine.
+  const plays = BEST_BETS.filter(b=>!b.totals && b.ev!=null).sort((a,b)=>b.ev-a.ev);
+  capExposure(plays, b=>b.kelly||0, b=>b.gameId);
   const card=document.createElement('div');
-  card.className='best-bets bb-paper';
-  const roi=betsROIHtml('MLBF5')+f5ServerHtml();
-  const title=`<div class="bb-title">&#x1F9EA; F5 Model Signals <span class="bb-paper-tag">paper only</span></div>`;
-  // Staleness caveat: the "claimed" numbers below are computed against whatever
-  // ask we could get. If that ask is an old snapshot, say so right where the
-  // numbers are, not just in the header chip.
-  // Kept to one or two lines: the header chip's tooltip carries the long form,
-  // and this sits above the first game card on a phone.
+  card.className='best-bets';
+  const roi=betsROIHtml('MLB');
+  const sub='<span style="font-weight:400;opacity:.6;font-size:.62rem">moneyline vs Kalshi</span>';
   const ageMin=kalshiAgeMin();
   const staleNote = ageMin==null ? '' :
     `<div class="bb-foot" style="color:${ageMin<=35?'#fbbf24':'#f87171'};margin-top:6px">`
-    + `${ageMin<=35?'&#x1F551;':'&#x26A0;&#xFE0F;'} Priced off a <b>${ageMin}-min-old</b> snapshot, not live Kalshi — `
-    + `drift can rival the 1.5&cent; edge these flags need.</div>`;
-  if(!valuePlays.length){
-    card.innerHTML=`${title}
-      <div class="bb-empty">No F5 divergence from the KXMLBF5 market today.</div>${roi}`;
+    + `${ageMin<=35?'&#x1F551;':'&#x26A0;&#xFE0F;'} Priced off a <b>${ageMin}-min-old</b> snapshot, not a live quote.</div>`;
+  if(!plays.length){
+    // This is the honest steady state, not a loading failure. The full-game
+    // model was measured against the Kalshi price over 134 replayed games and
+    // did not beat it, so its fair value is shrunk all the way to the market
+    // and nothing clears the bar. Say that plainly instead of implying a
+    // signal is coming.
+    card.innerHTML=`<div class="bb-title">&#x1F3AF; MLB Best Bets ${sub}</div>`
+      + `<div class="bb-empty">No +EV plays — the model agrees with the market, which is what the measurement predicts. Price shopping lives on the Fair Value Board.</div>`
+      + roi;
   }else{
     let rows='';
-    for(const b of valuePlays.slice(0,6)){
-      // Show the claimed edge next to what survives shrinking to the price.
-      // The gap between the two IS the finding — almost all of the claimed
-      // number was the model refusing to update on a market that disagreed.
-      const shrunk=b.shrunk!=null
-        ?`<span class="bb-ok" title="Edge left after shrinking the model toward the de-vigged Kalshi price">${b.shrunk>0?'+':''}${(b.shrunk*100).toFixed(1)}&cent; after shrink</span>`:'';
-      const moved=b.movedAgainst?'<span class="bb-warn" title="Price has moved against this side since first sight today — that is information arriving, not value appearing">&#x26A0; moved against</span>':'';
-      rows+=`<div class="bb-row"><span class="bb-mu">${b.matchup}</span>
-        <span class="bb-pick">${b.pick||b.team}</span>
-        <span class="bb-edge bb-edge-muted">${(b.roi*100).toFixed(0)}% claimed</span>${shrunk}${moved}</div>`;
+    for(const b of plays){
+      const tag='<span class="bb-type bb-type-ml">ML</span>';
+      const need=b.fair!=null?`<span class="bb-need" title="Worst price still +EV at this fair value">need ${fvAmer(breakEvenAmerican(b.fair))} or better</span>`:'';
+      const cap=(b.stakeCapped!=null&&b.stakeCapped<1e-4)
+        ?`<span class="bb-stake" style="opacity:.65" title="Per-game / per-day correlated-exposure cap is full">no room</span>`
+        :`<span class="bb-stake">${(((b.stakeCapped??b.kelly)||0)*100).toFixed(1)}% bankroll (&frac14;-Kelly)</span>`;
+      rows+=`<div class="bb-row"><span class="bb-mu">${esc(b.matchup)}</span>${tag}`
+        +`<span class="bb-pick">${esc(b.pick||b.team||'')}</span>`
+        +`<span class="bb-edge">+${(b.ev*100).toFixed(1)}% EV</span>`
+        +`<span class="bb-ok">fair ${(b.fair*100).toFixed(0)}%</span>${need}${cap}</div>`;
     }
-    card.innerHTML=`${title}
-      ${rows}
-      <div class="bb-foot"><b>These are not recommendations — this market is closed for betting.</b> Measured 2026-08-09 over 120 graded games: the F5 model's log-loss is <b>1.0137</b> against <b>0.9889</b> for the Kalshi price and <b>0.9912</b> for simply quoting the base rate, so it is worse than knowing nothing. Closing-line value on 52 flagged plays was <b>&minus;0.87pp</b> (z = &minus;2.65 clustered by date, beat-rate 27%), and flags went <b>14&ndash;38</b> for &minus;25% ROI while claiming +7.7pp of edge and realising &minus;6.7pp. Rows keep accruing as paper so the closing-line record can settle it. Re-entry bar: a <b>positive</b> CLV mean over 100+ further flags. If it ever reopens, post resting limits rather than taking the ask — the taker fee at 50&cent; is 1.75&cent;, roughly 70% of the 2.5&cent; edge these flags require.</div>${staleNote}${roi}`;
+    card.innerHTML=`<div class="bb-title">&#x1F3AF; MLB Best Bets <span class="bb-count">${plays.length}</span> ${sub}</div>`
+      + rows
+      + `<div class="bb-foot"><b>Fair value is the model shrunk toward the de-vigged Kalshi price</b>, not the raw model — otherwise a market moving against a pick reads as a bigger edge. Stake is quarter-Kelly, capped per game and per day. <b>"need X or better"</b> is the worst price still +EV. Not financial advice.</div>`
+      + staleNote + roi;
   }
   hdr.insertAdjacentElement('afterend', card);
 }

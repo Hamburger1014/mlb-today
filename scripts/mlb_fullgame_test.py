@@ -141,7 +141,7 @@ def main():
     ap.add_argument("--out", default=os.path.join(ROOT, "..", "mlb_fullgame_results.txt"))
     a = ap.parse_args()
 
-    E = json.load(open(os.path.join(ROOT, "data", "mlb_f5_predictions.json"),
+    E = json.load(open(os.path.join(ROOT, "analysis", "mlb_f5_predictions.archived.json"),
                        encoding="utf-8"))["entries"]
     ids = team_abbrs()
     snaps = kalshi_history()
