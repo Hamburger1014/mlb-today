@@ -21,7 +21,7 @@ is a far quieter signal and reads in weeks.
 The model here MUST match REAL_MODEL / realModelRawStats in index.html.
 scripts/verify_mlb_parity.py diffs the two and the workflow fails on drift.
 """
-import json, os, urllib.request
+import json, math, os, urllib.request
 from datetime import datetime, timedelta, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -273,7 +273,14 @@ def main():
     # For each entry, compare the implied probability of the MODEL'S SIDE at log
     # time vs at close. Positive means the market moved toward us after we
     # committed — the read that survives even when the results don't.
-    clv = []
+    # RAW CLV IS NOT A TEST OF THE MODEL. Prices drift toward the favourite
+    # between log time and close, so any model that mostly picks favourites
+    # collects that drift for free. Measured on 159 backfilled games: raw CLV
+    # +0.52pp at z=3.09, but backing whatever side the market ALREADY favoured
+    # earned +0.49pp on the same games, and the paired difference was +0.03pp
+    # (z=0.23). The control is therefore computed alongside, and the PAIRED
+    # difference is the number that answers the question.
+    clv, ctrl = [], []
     for e in entries:
         c, k0 = e.get("closing"), e.get("kalshi")
         if not c or not k0 or not c.get("kalshi"):
@@ -288,6 +295,11 @@ def main():
         p0 = k0["home"] if side_home else 1 - k0["home"]
         p1 = c["kalshi"]["home"] if side_home else 1 - c["kalshi"]["home"]
         clv.append(p1 - p0)
+        # control: the side the market itself favoured when we logged
+        fav_home = k0["home"] >= 0.5
+        f0 = k0["home"] if fav_home else 1 - k0["home"]
+        f1 = c["kalshi"]["home"] if fav_home else 1 - c["kalshi"]["home"]
+        ctrl.append(f1 - f0)
     if clv:
         avg = sum(clv) / len(clv)
         # A game where the price never moved is a push, not a loss. Counting it
@@ -296,12 +308,23 @@ def main():
         # actually moved and `moved` is published alongside it.
         movers = [d for d in clv if abs(d) > 1e-9]
         beat = sum(1 for d in movers if d > 0)
+        cavg = sum(ctrl) / len(ctrl)
+        diff = [x - y for x, y in zip(clv, ctrl)]
+        dm = sum(diff) / len(diff)
+        dsd = math.sqrt(sum((x - dm) ** 2 for x in diff) / (len(diff) - 1)) if len(diff) > 1 else 0.0
+        dse = dsd / math.sqrt(len(diff)) if diff else 0.0
         store["clv"] = {"n": len(clv), "moved": len(movers),
                         "avgCents": round(avg * 100, 2),
+                        "ctrlCents": round(cavg * 100, 2),
+                        "incrCents": round(dm * 100, 3),
+                        "incrSeCents": round(dse * 100, 3),
+                        "incrZ": round(dm / dse, 2) if dse else None,
                         "beatRate": round(beat / len(movers), 4) if movers else None}
         if movers:
-            print(f"  CLV: {len(clv)} games ({len(movers)} moved), avg {avg*100:+.2f}c, "
-                  f"market moved our way {beat}/{len(movers)} ({beat/len(movers):.0%})")
+            print(f"  CLV: {len(clv)} games, raw {avg*100:+.2f}c vs control "
+                  f"{cavg*100:+.2f}c -> incremental {dm*100:+.3f}c "
+                  f"(z={dm/dse:+.2f})" if dse else
+                  f"  CLV: {len(clv)} games, raw {avg*100:+.2f}c")
         else:
             print(f"  CLV: {len(clv)} games logged, none have moved yet")
     else:

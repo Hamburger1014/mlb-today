@@ -3969,13 +3969,24 @@ function mlbClvHtml(){
   // A game whose price never moved is a push, not a loss, so it is reported
   // separately instead of dragging the beat rate toward zero.
   if(c.moved===0) return `<div class="rec-clv">&#x1F4C8; <b>Closing line</b> &nbsp;&middot;&nbsp; ${c.n} games logged, <span style="color:var(--dim2)">none have moved yet</span></div>`;
-  const col=c.avgCents>0?'#86efac':(c.avgCents<0?'#f87171':'var(--dim)');
-  const beat=c.beatRate!=null?`${Math.round(c.beatRate*100)}%`:'&mdash;';
-  const acc=(a&&a.n)?` &nbsp;&middot;&nbsp; <span style="color:var(--dim2)">picks ${a.hit}&ndash;${a.n-a.hit} (${Math.round(a.rate*100)}%) on the same games</span>`:'';
-  return `<div class="rec-clv">&#x1F4C8; <b>Closing line</b> &nbsp;&middot;&nbsp; market moved toward the model `
-    + `<b style="color:${col}">${c.avgCents>=0?'+':''}${c.avgCents.toFixed(2)}&cent;</b> on average `
-    + `&nbsp;&middot;&nbsp; <b>${beat}</b> of the ${c.moved!=null?c.moved:c.n} that moved `
-    + `<span style="color:var(--dim2)">(n=${c.n})</span>${acc}</div>`;
+  // The headline is the INCREMENTAL number, not raw CLV. Prices drift toward
+  // the favourite between logging and close, and a model that mostly picks
+  // favourites collects that drift without contributing anything — measured on
+  // 159 backfilled games, raw CLV read +0.52pp at z=3.09 while the model added
+  // +0.03pp (z=0.23) over simply backing the market's own favourite. Raw is
+  // still shown, as context, because it is what most places would quote.
+  const incr=c.incrCents;
+  const col=(incr>0)?'#86efac':((incr<0)?'#f87171':'var(--dim)');
+  const acc=(a&&a.n)?` &nbsp;&middot;&nbsp; <span style="color:var(--dim2)">picks ${a.hit}&ndash;${a.n-a.hit} (${Math.round(a.rate*100)}%)</span>`:'';
+  if(incr==null)
+    return `<div class="rec-clv">&#x1F4C8; <b>Closing line</b> &nbsp;&middot;&nbsp; raw ${c.avgCents>=0?'+':''}${c.avgCents.toFixed(2)}&cent; <span style="color:var(--dim2)">(n=${c.n}) &mdash; awaiting the control needed to interpret it</span></div>`;
+  const z=(c.incrZ!=null)?` <span style="color:var(--dim2)">z=${c.incrZ>=0?'+':''}${c.incrZ.toFixed(2)}</span>`:'';
+  return `<div class="rec-clv">&#x1F4C8; <b>Closing line vs control</b> &nbsp;&middot;&nbsp; `
+    + `<b style="color:${col};font-size:.95rem">${incr>=0?'+':''}${incr.toFixed(2)}&cent;</b>${z} `
+    + `<span style="color:var(--dim2)">(n=${c.n})</span>${acc}`
+    + `<br><span style="color:var(--dim2)">raw ${c.avgCents>=0?'+':''}${c.avgCents.toFixed(2)}&cent; minus `
+    + `${c.ctrlCents>=0?'+':''}${(c.ctrlCents!=null?c.ctrlCents:0).toFixed(2)}&cent; for simply backing the market&rsquo;s own favourite. `
+    + `Raw CLV flatters any model that picks favourites, because prices drift that way on their own &mdash; only the difference is the model.</span></div>`;
 }
 
 // Build the F5 signal strip from BEST_BETS, insert after the header.
@@ -4618,13 +4629,18 @@ function clvHtml(){
   //   n         -> current format
   if(serverClv.moved===0)
     return `<span class="track-stat" style="color:var(--dim2)" title="Closing prices captured, but none of these games has moved yet">&#x1F4C8; CLV: ${serverClv.n} logged, none moved yet</span>`;
-  const good=serverClv.avgCents>0;
-  const beat=serverClv.beatRate!=null?Math.round(serverClv.beatRate*100)+'%':'—';
-  const denom=serverClv.moved!=null?`of ${serverClv.moved}`:`of ${serverClv.n}`;
-  return `<span class="track-stat" title="Implied probability of the model's side at log time vs at close. Positive = the market moved toward us. Watch this instead of the hit rate: it reads in weeks rather than a season.">`
-    + `&#x1F4C8; Closing line: <b class="${good?'track-good':'track-bad'}">${serverClv.avgCents>=0?'+':''}${serverClv.avgCents.toFixed(2)}&cent;</b> avg`
-    + ` · moved our way <b>${beat}</b> ${denom}`
-    + `<span style="color:var(--dim2)"> (n=${serverClv.n})</span></span>`;
+  // Headline is the INCREMENTAL number over a control that backs whatever side
+  // the market already favoured. Raw CLV drifts positive for any favourite-
+  // picking model regardless of skill; the difference is the only part that is
+  // the model. Measured on MLB: raw +0.52pp z=3.09, incremental +0.03pp z=0.23.
+  const incr=serverClv.incrCents;
+  if(incr==null)
+    return `<span class="track-stat" style="color:var(--dim2)" title="Awaiting the control needed to interpret this">&#x1F4C8; CLV raw ${serverClv.avgCents>=0?'+':''}${serverClv.avgCents.toFixed(2)}&cent; (n=${serverClv.n})</span>`;
+  const good=incr>0;
+  const z=(serverClv.incrZ!=null)?` z=${serverClv.incrZ>=0?'+':''}${serverClv.incrZ.toFixed(2)}`:'';
+  return `<span class="track-stat" title="Model CLV minus the CLV of simply backing whatever side the market already favoured, on the same games. Raw CLV flatters any favourite-picking model because prices drift that way on their own — only the difference is the model. Raw ${serverClv.avgCents.toFixed(2)}c, control ${(serverClv.ctrlCents!=null?serverClv.ctrlCents:0).toFixed(2)}c.">`
+    + `&#x1F4C8; CLV vs control: <b class="${good?'track-good':'track-bad'}">${incr>=0?'+':''}${incr.toFixed(2)}&cent;</b>${z}`
+    + `<span style="color:var(--dim2)"> (raw ${serverClv.avgCents>=0?'+':''}${serverClv.avgCents.toFixed(2)}&cent;, n=${serverClv.n})</span></span>`;
 }
 function mergedLog(){
   const byId=new Map();

@@ -877,13 +877,18 @@ function clvHtml(){
   //   n         -> current format
   if(serverClv.moved===0)
     return `<span class="track-stat" style="color:var(--dim2)" title="Closing prices captured, but none of these games has moved yet">&#x1F4C8; CLV: ${serverClv.n} logged, none moved yet</span>`;
-  const good=serverClv.avgCents>0;
-  const beat=serverClv.beatRate!=null?Math.round(serverClv.beatRate*100)+'%':'—';
-  const denom=serverClv.moved!=null?`of ${serverClv.moved}`:`of ${serverClv.n}`;
-  return `<span class="track-stat" title="Implied probability of the model's side at log time vs at close. Positive = the market moved toward us. Watch this instead of the hit rate: it reads in weeks rather than a season.">`
-    + `&#x1F4C8; Closing line: <b class="${good?'track-good':'track-bad'}">${serverClv.avgCents>=0?'+':''}${serverClv.avgCents.toFixed(2)}&cent;</b> avg`
-    + ` · moved our way <b>${beat}</b> ${denom}`
-    + `<span style="color:var(--dim2)"> (n=${serverClv.n})</span></span>`;
+  // Headline is the INCREMENTAL number over a control that backs whatever side
+  // the market already favoured. Raw CLV drifts positive for any favourite-
+  // picking model regardless of skill; the difference is the only part that is
+  // the model. Measured on MLB: raw +0.52pp z=3.09, incremental +0.03pp z=0.23.
+  const incr=serverClv.incrCents;
+  if(incr==null)
+    return `<span class="track-stat" style="color:var(--dim2)" title="Awaiting the control needed to interpret this">&#x1F4C8; CLV raw ${serverClv.avgCents>=0?'+':''}${serverClv.avgCents.toFixed(2)}&cent; (n=${serverClv.n})</span>`;
+  const good=incr>0;
+  const z=(serverClv.incrZ!=null)?` z=${serverClv.incrZ>=0?'+':''}${serverClv.incrZ.toFixed(2)}`:'';
+  return `<span class="track-stat" title="Model CLV minus the CLV of simply backing whatever side the market already favoured, on the same games. Raw CLV flatters any favourite-picking model because prices drift that way on their own — only the difference is the model. Raw ${serverClv.avgCents.toFixed(2)}c, control ${(serverClv.ctrlCents!=null?serverClv.ctrlCents:0).toFixed(2)}c.">`
+    + `&#x1F4C8; CLV vs control: <b class="${good?'track-good':'track-bad'}">${incr>=0?'+':''}${incr.toFixed(2)}&cent;</b>${z}`
+    + `<span style="color:var(--dim2)"> (raw ${serverClv.avgCents>=0?'+':''}${serverClv.avgCents.toFixed(2)}&cent;, n=${serverClv.n})</span></span>`;
 }
 function mergedLog(){
   const byId=new Map();

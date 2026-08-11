@@ -476,7 +476,9 @@ def main():
     # For each entry where the model had a side, compare the implied
     # probability of that side at log time vs at close. Positive means the
     # market moved toward us — the signal that survives even when results don't.
-    clv = []
+    # See mlb_log.py: raw CLV is contaminated by drift toward the favourite, so
+    # the favourite-backing control and the PAIRED difference are what matter.
+    clv, ctrl = [], []
     for e in entries:
         c = e.get("closing")
         if not c or not e.get("vegas") or not c.get("vegas"):
@@ -497,6 +499,19 @@ def main():
         if p0 is None or p1 is None:
             continue
         clv.append({"id": e["id"], "delta": p1 - p0})
+        # control: whichever side the market favoured at log time
+        h0, a0 = ml_to_raw(e["vegas"].get("homeML")), ml_to_raw(e["vegas"].get("awayML"))
+        if h0 is not None and a0 is not None and (h0 + a0) > 0:
+            fav_home = (h0 / (h0 + a0)) >= 0.5
+            def imp2(v, home):
+                hh, aa = ml_to_raw(v.get("homeML")), ml_to_raw(v.get("awayML"))
+                if hh is None or aa is None or (hh + aa) <= 0:
+                    return None
+                return (hh / (hh + aa)) if home else (aa / (hh + aa))
+            f0, f1 = imp2(e["vegas"], fav_home), imp2(c["vegas"], fav_home)
+            ctrl.append({"id": e["id"], "delta": (f1 - f0) if (f0 is not None and f1 is not None) else 0.0})
+        else:
+            ctrl.append({"id": e["id"], "delta": 0.0})
     if clv:
         avg = sum(x["delta"] for x in clv) / len(clv)
         # A price that never moved is a PUSH, not a loss. Counting flat games in
@@ -505,12 +520,22 @@ def main():
         # published 35% when the rate over actual movers was 46%.
         movers = [x for x in clv if abs(x["delta"]) > 1e-9]
         beat = sum(1 for x in movers if x["delta"] > 0)
+        cavg = sum(x["delta"] for x in ctrl) / len(ctrl) if ctrl else 0.0
+        diff = [a["delta"] - b["delta"] for a, b in zip(clv, ctrl)]
+        dm = sum(diff) / len(diff) if diff else 0.0
+        dsd = math.sqrt(sum((x - dm) ** 2 for x in diff) / (len(diff) - 1)) if len(diff) > 1 else 0.0
+        dse = dsd / math.sqrt(len(diff)) if diff else 0.0
         store["clv"] = {"n": len(clv), "moved": len(movers),
                         "avgCents": round(avg * 100, 2),
+                        "ctrlCents": round(cavg * 100, 2),
+                        "incrCents": round(dm * 100, 3),
+                        "incrSeCents": round(dse * 100, 3),
+                        "incrZ": round(dm / dse, 2) if dse else None,
                         "beatRate": round(beat / len(movers), 4) if movers else None}
         if movers:
-            print(f"  CLV: {len(clv)} games ({len(movers)} moved), avg {avg*100:+.2f}c, "
-                  f"market moved our way {beat}/{len(movers)} ({beat/len(movers):.0%})")
+            print(f"  CLV: {len(clv)} games, raw {avg*100:+.2f}c vs control "
+                  f"{cavg*100:+.2f}c -> incremental {dm*100:+.3f}c"
+                  + (f" (z={dm/dse:+.2f})" if dse else ""))
         else:
             print(f"  CLV: {len(clv)} games logged, none have moved yet")
 
