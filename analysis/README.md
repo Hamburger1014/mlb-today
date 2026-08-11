@@ -59,5 +59,10 @@ ESPN-based odds backfill at the season in progress.
 ## Results
 
 Written up in `docs/` — `market_edge_results.txt`, `wnba_backfill_results.txt`,
-`mlb_fullgame_results.txt`, and the reasoning behind all of it in
-`docs/market_edge_playbook.md`.
+`mlb_fullgame_results.txt`.
+
+The strategy write-up those results feed into is kept **out of this repo on
+purpose** — this repo is public because GitHub Pages serves the site from it,
+and the playbook is not something to publish. It lives locally at
+`Coinbase/market_edge_playbook.md` and is git-ignored here so it cannot be
+re-added by accident.

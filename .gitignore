@@ -1,2 +1,6 @@
 __pycache__/
 *.pyc
+
+# Strategy write-up: this repo is PUBLIC (GitHub Pages serves the site from it).
+# The playbook stays local at Coinbase/market_edge_playbook.md.
+docs/market_edge_playbook.md
