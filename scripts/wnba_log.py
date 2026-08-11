@@ -481,6 +481,11 @@ def main():
         c = e.get("closing")
         if not c or not e.get("vegas") or not c.get("vegas"):
             continue
+        # On a slate's first run the closing capture and the log-time capture
+        # are the SAME snapshot, so the delta is exactly 0 and it lands in the
+        # beat-rate denominator as a loss. Require a genuinely later capture.
+        if c.get("at") and e.get("logged_at") and c["at"] <= e["logged_at"]:
+            continue
         p_model = e["model"]["game"]
         side_home = p_model >= 0.5
         def implied(v):
@@ -494,11 +499,20 @@ def main():
         clv.append({"id": e["id"], "delta": p1 - p0})
     if clv:
         avg = sum(x["delta"] for x in clv) / len(clv)
-        beat = sum(1 for x in clv if x["delta"] > 0)
-        store["clv"] = {"n": len(clv), "avgCents": round(avg * 100, 2),
-                        "beatRate": round(beat / len(clv), 4)}
-        print(f"  CLV: {len(clv)} games, avg {avg*100:+.2f}c, "
-              f"market moved our way {beat}/{len(clv)} ({beat/len(clv):.0%})")
+        # A price that never moved is a PUSH, not a loss. Counting flat games in
+        # the denominator drags the rate down and makes a quiet market look like
+        # a failing model — measured here: 4 of 17 games were flat, which
+        # published 35% when the rate over actual movers was 46%.
+        movers = [x for x in clv if abs(x["delta"]) > 1e-9]
+        beat = sum(1 for x in movers if x["delta"] > 0)
+        store["clv"] = {"n": len(clv), "moved": len(movers),
+                        "avgCents": round(avg * 100, 2),
+                        "beatRate": round(beat / len(movers), 4) if movers else None}
+        if movers:
+            print(f"  CLV: {len(clv)} games ({len(movers)} moved), avg {avg*100:+.2f}c, "
+                  f"market moved our way {beat}/{len(movers)} ({beat/len(movers):.0%})")
+        else:
+            print(f"  CLV: {len(clv)} games logged, none have moved yet")
 
     entries.sort(key=lambda e: (e["date"], e["id"]))
     store["entries"] = entries[-800:]

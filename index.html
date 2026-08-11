@@ -3585,13 +3585,13 @@ function mlbClvHtml(){
   if(!c||!c.n) return `<div class="rec-clv">&#x1F4C8; <b>Closing line</b> &nbsp;&middot;&nbsp; <span style="color:var(--dim2)">no closing prices captured yet &mdash; the scheduled job fills this in as games approach first pitch</span></div>`;
   // A game whose price never moved is a push, not a loss, so it is reported
   // separately instead of dragging the beat rate toward zero.
-  if(!c.moved) return `<div class="rec-clv">&#x1F4C8; <b>Closing line</b> &nbsp;&middot;&nbsp; ${c.n} games logged, <span style="color:var(--dim2)">none have moved yet</span></div>`;
+  if(c.moved===0) return `<div class="rec-clv">&#x1F4C8; <b>Closing line</b> &nbsp;&middot;&nbsp; ${c.n} games logged, <span style="color:var(--dim2)">none have moved yet</span></div>`;
   const col=c.avgCents>0?'#86efac':(c.avgCents<0?'#f87171':'var(--dim)');
   const beat=c.beatRate!=null?`${Math.round(c.beatRate*100)}%`:'&mdash;';
   const acc=(a&&a.n)?` &nbsp;&middot;&nbsp; <span style="color:var(--dim2)">picks ${a.hit}&ndash;${a.n-a.hit} (${Math.round(a.rate*100)}%) on the same games</span>`:'';
   return `<div class="rec-clv">&#x1F4C8; <b>Closing line</b> &nbsp;&middot;&nbsp; market moved toward the model `
     + `<b style="color:${col}">${c.avgCents>=0?'+':''}${c.avgCents.toFixed(2)}&cent;</b> on average `
-    + `&nbsp;&middot;&nbsp; <b>${beat}</b> of the ${c.moved} that moved `
+    + `&nbsp;&middot;&nbsp; <b>${beat}</b> of the ${c.moved!=null?c.moved:c.n} that moved `
     + `<span style="color:var(--dim2)">(n=${c.n})</span>${acc}</div>`;
 }
 
@@ -4206,7 +4206,7 @@ function betsHtml(){
   return `<span class="track-stat">${txt}</span>`;
 }
 
-let serverLog=[], serverLogAt=null;
+let serverLog=[], serverLogAt=null, serverClv=null;
 async function loadServerLog(){
   try{
     const r=await fetch('data/wnba_predictions.json?cb='+Date.now());
@@ -4214,7 +4214,34 @@ async function loadServerLog(){
     const d=await r.json();
     serverLog=(d.entries||[]).map(e=>({...e, mu:(e.mu!=null?e.mu:(e.model&&e.model.mu))}));
     serverLogAt=d.updated_at||null;
-  }catch(e){ serverLog=[]; serverLogAt=null; }
+    serverClv=d.clv||null;
+  }catch(e){ serverLog=[]; serverLogAt=null; serverClv=null; }
+}
+// ── CLOSING LINE VALUE ───────────────────────────────────────────────────────
+// Written by scripts/wnba_log.py, so it is the same for every visitor. Compares
+// the implied probability of the model's side when it was logged against the
+// same side at close: positive means the market moved TOWARD us afterwards.
+// This is the number to watch rather than the hit rate — outcomes are mostly
+// variance and take a season to resolve, whereas the market agreeing with us is
+// a far quieter signal that reads in weeks.
+function clvHtml(){
+  if(!serverClv || !serverClv.n) return '';
+  // Games whose price never moved are pushes, not losses; the rate is over
+  // movers and `moved` is shown so the denominator is never a mystery.
+  // `moved` distinguishes three states, and conflating them misreports:
+  //   0         -> captures exist but no price has moved yet
+  //   undefined -> payload written before `moved` was published; the rate it
+  //                carries is over ALL games, so do not claim a mover count
+  //   n         -> current format
+  if(serverClv.moved===0)
+    return `<span class="track-stat" style="color:var(--dim2)" title="Closing prices captured, but none of these games has moved yet">&#x1F4C8; CLV: ${serverClv.n} logged, none moved yet</span>`;
+  const good=serverClv.avgCents>0;
+  const beat=serverClv.beatRate!=null?Math.round(serverClv.beatRate*100)+'%':'—';
+  const denom=serverClv.moved!=null?`of ${serverClv.moved}`:`of ${serverClv.n}`;
+  return `<span class="track-stat" title="Implied probability of the model's side at log time vs at close. Positive = the market moved toward us. Watch this instead of the hit rate: it reads in weeks rather than a season.">`
+    + `&#x1F4C8; Closing line: <b class="${good?'track-good':'track-bad'}">${serverClv.avgCents>=0?'+':''}${serverClv.avgCents.toFixed(2)}&cent;</b> avg`
+    + ` · moved our way <b>${beat}</b> ${denom}`
+    + `<span style="color:var(--dim2)"> (n=${serverClv.n})</span></span>`;
 }
 function mergedLog(){
   const byId=new Map();
@@ -4330,6 +4357,7 @@ function renderTrackBar(){
     if(s.vN) html+=`<span class="track-stat">vs Kalshi (≥5¢): <b>${s.vHit}/${s.vN}</b>${pct(s.vHit,s.vN)}</span>`;
   }
   html+=betsHtml();
+  html+=clvHtml();
   if(pending) html+=`<span class="track-stat" style="color:var(--dim2)">${pending} pending</span>`;
   html+=serverLogAt
     ? `<span class="track-stat" style="color:var(--dim2)" title="Logged and graded by a scheduled job, independent of this browser">🌐 ${serverLog.length} server-logged</span>`
