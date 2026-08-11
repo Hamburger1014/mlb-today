@@ -145,6 +145,7 @@
     .bb-type-sp{background:rgba(20,184,166,.18);color:#2dd4bf;border:1px solid rgba(20,184,166,.3)}
     .bb-stake{color:var(--dim);font-size:.74rem;margin-left:auto}
     .bb-need{color:#7dd3fc;font-size:.72rem;font-weight:600;white-space:nowrap}
+    .rec-clv{margin-top:6px;padding-top:6px;border-top:1px solid var(--line)}
     /* Fair Value Board — dense on purpose: it is a scan-and-compare screen. */
     .fv-tbl{width:100%;border-collapse:collapse;font-size:.82rem}
     .fv-tbl thead th{text-align:left;font-size:.66rem;text-transform:uppercase;letter-spacing:.05em;
@@ -3202,7 +3203,7 @@ async function loadModelRecords(){
   // payload cached earlier today would render the old three-line block.
   const CK='mlb_model_records_v2';
   try{ const c=JSON.parse(localStorage.getItem(CK)||'null');
-    if(c && c.date===ystr && c.html){ el.innerHTML=c.html; el.style.display='block'; wireRecordToggle(); if(c.calib) MODEL_CALIB=c.calib; return; } }catch(e){}
+    if(c && c.date===ystr && c.html){ el.innerHTML=c.html; el.style.display='block'; wireRecordToggle(); paintMlbClv(); if(c.calib) MODEL_CALIB=c.calib; return; } }catch(e){}
   try{
     const data=await mlbFetch(`/schedule?sportId=1&startDate=${SEASON}-03-01&endDate=${ystr}&gameType=R&hydrate=probablePitcher,linescore`);
     const games=[];
@@ -3274,7 +3275,7 @@ async function loadModelRecords(){
       `</div>`+
       `<div class="rec-detail" id="rec-detail" hidden>${(line0?line0+'<br>':'')+line2}</div>`;
     el.innerHTML=html; el.style.display='block';
-    wireRecordToggle();
+    wireRecordToggle(); paintMlbClv();
     try{ localStorage.setItem(CK, JSON.stringify({date:ystr,html,calib:MODEL_CALIB})); }catch(e){}
   }catch(e){ el.style.display='none'; }
 }
@@ -3370,6 +3371,7 @@ async function init(){
     cap(fetchStarterKBB(mlbGames.flatMap(g=>[g.homeSpId,g.awaySpId])), 10000, undefined),
     cap(fetchWeather(mlbGames), 10000, undefined),
     cap(fetchBullpen(), 10000, undefined),
+    cap(loadMlbServerLog().then(paintMlbClv), 8000, undefined),
   ]);
   stepDone('s4');
 
@@ -3549,6 +3551,50 @@ function wireGameControls(container, ctrls){
 // scheduled Action. The on-page "Realized" line above it comes from THIS
 // browser's localStorage and also blends bets made before the July-31 Poisson
 // fix; this line is browser-independent and post-fix only.
+// ── CLOSING LINE VALUE ───────────────────────────────────────────────────────
+// Written by scripts/mlb_log.py on the scheduled job, so it is identical for
+// every visitor and survives independently of any browser's localStorage.
+//
+// CLV compares the implied probability of the model's side when it was logged
+// against the same side at close. Positive means the market moved TOWARD the
+// model after it committed. Watch this instead of win rate: at ~15 games a day,
+// separating a real 5-point accuracy drop from noise takes roughly 1,500 games
+// (~16 weeks) because results are mostly variance. CLV is far quieter.
+let mlbServerLog=null;
+async function loadMlbServerLog(){
+  try{
+    const r=await fetch('data/mlb_predictions.json?cb='+Date.now());
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    mlbServerLog=await r.json();
+  }catch(e){ mlbServerLog=null; }
+}
+// The record strip is cached in localStorage as raw HTML, so CLV cannot live
+// inside that string — a cached render would never contain it, and the fetch
+// resolves after the strip paints anyway. Append it to the live DOM instead,
+// idempotently, whenever either the log or the strip becomes available.
+function paintMlbClv(){
+  const host=document.getElementById('rec-detail');
+  if(!host||!mlbServerLog) return;
+  let el=document.getElementById('mlb-clv-slot');
+  if(!el){ el=document.createElement('div'); el.id='mlb-clv-slot'; host.appendChild(el); }
+  el.innerHTML=mlbClvHtml();
+}
+function mlbClvHtml(){
+  if(!mlbServerLog) return '';
+  const c=mlbServerLog.clv, a=mlbServerLog.accuracy;
+  if(!c||!c.n) return `<div class="rec-clv">&#x1F4C8; <b>Closing line</b> &nbsp;&middot;&nbsp; <span style="color:var(--dim2)">no closing prices captured yet &mdash; the scheduled job fills this in as games approach first pitch</span></div>`;
+  // A game whose price never moved is a push, not a loss, so it is reported
+  // separately instead of dragging the beat rate toward zero.
+  if(!c.moved) return `<div class="rec-clv">&#x1F4C8; <b>Closing line</b> &nbsp;&middot;&nbsp; ${c.n} games logged, <span style="color:var(--dim2)">none have moved yet</span></div>`;
+  const col=c.avgCents>0?'#86efac':(c.avgCents<0?'#f87171':'var(--dim)');
+  const beat=c.beatRate!=null?`${Math.round(c.beatRate*100)}%`:'&mdash;';
+  const acc=(a&&a.n)?` &nbsp;&middot;&nbsp; <span style="color:var(--dim2)">picks ${a.hit}&ndash;${a.n-a.hit} (${Math.round(a.rate*100)}%) on the same games</span>`:'';
+  return `<div class="rec-clv">&#x1F4C8; <b>Closing line</b> &nbsp;&middot;&nbsp; market moved toward the model `
+    + `<b style="color:${col}">${c.avgCents>=0?'+':''}${c.avgCents.toFixed(2)}&cent;</b> on average `
+    + `&nbsp;&middot;&nbsp; <b>${beat}</b> of the ${c.moved} that moved `
+    + `<span style="color:var(--dim2)">(n=${c.n})</span>${acc}</div>`;
+}
+
 // Build the F5 signal strip from BEST_BETS, insert after the header.
 //
 // DEMOTED to paper-only (Aug 7 2026). The server-side forward log over 38 graded
