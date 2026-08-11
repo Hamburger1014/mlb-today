@@ -755,6 +755,7 @@ function switchView(v){
     const jobs=[fvFetchFootball().catch(()=>{})];
     if(!wnbaLoaded){ wnbaLoaded=true; jobs.push(Promise.resolve(WNBA.load()).catch(()=>{})); }
     Promise.all(jobs).then(renderCard).catch(()=>renderCard());
+    loadCardServerLog().then(renderCard).catch(()=>{});
     fvGradeBets(CARD_LOG).then(ch=>{ if(ch){ cardLogSave(); renderCard(); } }).catch(()=>{});
     renderCard();
   }
@@ -778,6 +779,7 @@ function switchView(v){
 function refreshActiveView(){
   if(ACTIVE_VIEW==='wnba') return WNBA.load();
   if(ACTIVE_VIEW==='card') return Promise.all([
+    loadCardServerLog().catch(()=>{}),
     fvFetchFootball(true).catch(()=>{}),
     Promise.resolve(WNBA.load()).catch(()=>{}),
   ]).then(renderCard).catch(()=>renderCard());
@@ -3717,6 +3719,27 @@ function cardCandidates(){
 // if the page is never opened on a day with plays, that day is not recorded.
 // The card fires rarely and is a morning page, so this is a real but tolerable
 // gap, and it is stated on the page rather than papered over.
+// A scheduled job now writes this same record to data/card_log.json, so it no
+// longer depends on a browser being open. The server copy WINS where both have
+// an entry: it is written every 10 minutes from the same constants (gated by
+// scripts/verify_card_parity.py), whereas the local one only exists for days
+// this browser happened to be looking. Local entries are kept and merged so
+// nothing recorded before the job existed is lost.
+let CARD_SERVER=null, CARD_SERVER_AT=null;
+async function loadCardServerLog(){
+  try{
+    const r=await fetch('data/card_log.json?cb='+Date.now());
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const d=await r.json();
+    CARD_SERVER=d; CARD_SERVER_AT=d.updated_at||null;
+  }catch(e){ CARD_SERVER=null; CARD_SERVER_AT=null; }
+}
+function cardMerged(){
+  const byId=new Map();
+  for(const e of CARD_LOG) byId.set(String(e.id),e);
+  for(const e of ((CARD_SERVER&&CARD_SERVER.entries)||[])) byId.set(String(e.id),e);
+  return [...byId.values()];
+}
 const CARD_LOG_KEY='card_log_v1';
 let CARD_LOG=(()=>{ try{ return JSON.parse(localStorage.getItem(CARD_LOG_KEY)||'[]'); }catch(e){ return []; } })();
 function cardLogSave(){ try{ localStorage.setItem(CARD_LOG_KEY,JSON.stringify(CARD_LOG)); }catch(e){} }
@@ -3749,20 +3772,27 @@ function cardLogPlays(plays){
   return added;
 }
 function cardStats(){
-  const graded=CARD_LOG.filter(x=>x.result);
+  const LOG=cardMerged();
+  const graded=LOG.filter(x=>x.result);
   const settled=graded.filter(x=>!x.result.push);
   const w=settled.filter(x=>x.result.won).length;
   const staked=settled.reduce((s,x)=>s+x.units,0);
   const won=settled.reduce((s,x)=>s+(x.result.won?x.units*fvPayout(x.priceAmer):-x.units),0);
-  return {n:CARD_LOG.length, graded:graded.length,
+  return {n:LOG.length, graded:graded.length,
           pushes:graded.length-settled.length,
           w, l:settled.length-w, staked, won,
           roi:staked>0?won/staked:null,
-          pending:CARD_LOG.filter(x=>!x.result).length};
+          pending:LOG.filter(x=>!x.result).length};
 }
 function cardRecordHtml(){
   const s=cardStats();
-  if(!s.n) return '<div class="bb-foot" style="padding:10px 18px">&#x1F4D2; <b>Card record</b> &nbsp;&middot;&nbsp; <span style="color:var(--dim2)">nothing logged yet. Every play the card shows pregame is recorded with its unit size and graded from the result, so it can be judged on what it actually said.</span></div>';
+  // The source indicator belongs on the empty state too: an empty record is
+  // exactly when you want to know whether the scheduled job is actually
+  // running, or whether you are looking at one browser's blank slate.
+  const src=CARD_SERVER_AT
+    ?'&#x1F310; scheduled job is writing this'
+    :'&#x1F4BE; server log unreachable &mdash; this browser only';
+  if(!s.n) return '<div class="bb-foot" style="padding:10px 18px">&#x1F4D2; <b>Card record</b> &nbsp;&middot;&nbsp; <span style="color:var(--dim2)">nothing logged yet &mdash; '+src+'. Every play the card shows pregame is recorded with its unit size and graded from the result, so it can be judged on what it actually said.</span></div>';
   const col=s.won>0?'#86efac':(s.won<0?'#f87171':'var(--dim)');
   const rec=s.w+s.l ? `<b>${s.w}&ndash;${s.l}</b>${s.pushes?` &middot; ${s.pushes} push`:''}` : '<span style="color:var(--dim2)">none settled</span>';
   const units=s.w+s.l
@@ -3771,7 +3801,7 @@ function cardRecordHtml(){
     : '';
   const pend=s.pending?` &nbsp;&middot;&nbsp; <span style="color:var(--dim2)">${s.pending} pending</span>`:'';
   return `<div class="bb-foot" style="padding:10px 18px">&#x1F4D2; <b>Card record</b> &nbsp;&middot;&nbsp; ${rec}${units}${pend}`
-    + `<br><span style="color:var(--dim2)">Logged in this browser when the card is open pregame &mdash; unlike the model logs, no scheduled job writes it, so a day the page is never opened is a day not recorded. Units are the size the card advised, after shrink and caps.</span></div>`;
+    + `<br><span style="color:var(--dim2)">${CARD_SERVER_AT?'&#x1F310; Written by the scheduled job, so it records every day whether or not this page is open. ':'&#x1F4BE; Server log unreachable &mdash; showing this browser\'s own entries only. '}Units are the size the card advised, after shrink and caps.</span></div>`;
 }
 
 function renderCard(){

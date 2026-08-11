@@ -27,6 +27,8 @@ on:
       - 'scripts/verify_wnba_parity.py'
       - 'scripts/mlb_log.py'
       - 'scripts/football_log.py'
+      - 'scripts/card_log.py'
+      - 'scripts/verify_card_parity.py'
       - 'scripts/verify_mlb_parity.py'
       - '.github/workflows/kalshi-snapshot.yml'
 
@@ -59,6 +61,10 @@ jobs:
         run: python scripts/mlb_log.py
       - name: Capture NFL / CFB closing lines
         run: python scripts/football_log.py
+      - name: Verify Today's Card parity (page vs logger)
+        run: python scripts/verify_card_parity.py
+      - name: Log & grade Today's Card
+        run: python scripts/card_log.py
       # These files are regenerated every run, so a rebase against a concurrent
       # human commit can conflict on them (it did). Instead: re-base onto the
       # current remote with a mixed reset, which keeps the freshly generated
@@ -73,7 +79,8 @@ jobs:
             git reset -q origin/main
             git add data/kalshi_wnba.json data/kalshi_mlb.json \
                     data/wnba_predictions.json data/wnba_bets.json \
-                    data/mlb_predictions.json data/football_lines.json
+                    data/mlb_predictions.json data/football_lines.json \
+                    data/card_log.json
             if git diff --cached --quiet; then
               echo "no changes"; exit 0
             fi
