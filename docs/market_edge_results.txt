@@ -1,0 +1,117 @@
+TWO-LOGIT MARKET TEST   (de-vig = power)
+
+==========================================================================
+MLB F5 3-way  vs  Kalshi asks at log time
+==========================================================================
+  n = 120 games, 3 outcomes
+
+  B_model  = -0.847  (SE 0.708, z = -1.20)
+  B_market = +1.871  (SE 0.718, z vs 1.0 = +1.21)
+  implied blend weight on model  w = -0.828
+
+  log-loss   base rate     0.9912
+             model alone   1.0137
+             market alone  0.9889   <-- the bar
+             50/50 pool    0.9988
+             fitted pool   0.9824
+
+  in-sample gain of fitted pool over market alone: +0.0065 nats
+  VERDICT: B_model is not distinguishable from zero.
+           No evidence the model adds information over the price.
+
+  WINNER'S CURSE (flagged plays, n=49, 14 hit)
+    mean claimed edge  +0.0857
+    mean realised edge -0.0666
+    slope of realised on claimed = -1.222 (SE 2.391)
+    -> divide edge thresholds by this slope if it is < 1
+
+==========================================================================
+MLB F5 3-way  vs  Kalshi CLOSING asks
+==========================================================================
+  n = 123 games, 3 outcomes
+
+  B_model  = -0.675  (SE 0.675, z = -1.00)
+  B_market = +1.731  (SE 0.682, z vs 1.0 = +1.07)
+  implied blend weight on model  w = -0.639
+
+  log-loss   base rate     0.9866
+             model alone   1.0065
+             market alone  0.9830   <-- the bar
+             50/50 pool    0.9922
+             fitted pool   0.9782
+
+  in-sample gain of fitted pool over market alone: +0.0048 nats
+  VERDICT: B_model is not distinguishable from zero.
+           No evidence the model adds information over the price.
+
+  F5 CLV on flagged plays: n=52  mean -0.87 pp (SE 0.30)  beat-rate 26.9%
+
+==========================================================================
+WNBA game winner  vs  VEGAS (log time)
+==========================================================================
+  n = 12 games, 2 outcomes
+
+  B_model  = -0.535  (SE 2.622, z = -0.20)
+  B_market = +1.943  (SE 2.781, z vs 1.0 = +0.34)
+  implied blend weight on model  w = -0.380
+
+  log-loss   base rate     0.6792
+             model alone   0.5380
+             market alone  0.5205   <-- the bar
+             50/50 pool    0.5270
+             fitted pool   0.5076
+
+  in-sample gain of fitted pool over market alone: +0.0129 nats
+  VERDICT: B_model is not distinguishable from zero.
+           No evidence the model adds information over the price.
+  ** n=12 is far too small; treat as a pipeline check, not a verdict. **
+
+==========================================================================
+WNBA game winner  vs  KALSHI (log time)
+==========================================================================
+  n = 12 games, 2 outcomes
+
+  B_model  = -1.300  (SE 2.892, z = -0.45)
+  B_market = +2.899  (SE 3.288, z vs 1.0 = +0.58)
+  implied blend weight on model  w = -0.813
+
+  log-loss   base rate     0.6792
+             model alone   0.5380
+             market alone  0.5153   <-- the bar
+             50/50 pool    0.5245
+             fitted pool   0.4893
+
+  in-sample gain of fitted pool over market alone: +0.0260 nats
+  VERDICT: B_model is not distinguishable from zero.
+           No evidence the model adds information over the price.
+  ** n=12 is far too small; treat as a pipeline check, not a verdict. **
+
+WNBA quarters: 0 usable rows (Kalshi quarter prices are null in the log) - cannot test yet.LIKELIHOOD-RATIO TEST  H0: B_model = 0
+  market-only (free sharpening) NLL 118.6306  at B_market=1.058
+  full 2-param                  NLL 117.8896
+  LR = 1.482  df=1  p = 0.223
+  model-only (free sharpening)  NLL 121.5298  at B_model=0.897
+     -> optimal sharpening of the MODEL alone is 0.90 (1.0 = as-is; <1 = too confident)
+
+BOOTSTRAP (2000 resamples)
+  B_model  median -0.845   95% CI [-2.346, +0.513]   P(B_model>0) = 0.123
+  B_market median +1.865   95% CI [+0.513, +3.394]
+  corr(B_model,B_market) = -0.955
+
+TIE-EXCLUDED (home vs away, conditional on no tie)  n=103
+  B_model -1.986 (SE 1.096)   B_market +1.615 (SE 0.746)
+  ll model 0.7070  market 0.6844
+  -> if B_market falls to ~1 here, the >1 sharpening was the illiquid TIE leg / ask spread
+
+MARKET CALIBRATION BY LEG (power-devigged Kalshi ask)
+  home  mean market p 0.4532   actual 0.5000   diff +0.0468
+  tie   mean market p 0.1507   actual 0.1417   diff -0.0091
+  away  mean market p 0.3960   actual 0.3583   diff -0.0377
+MODEL CALIBRATION BY LEG
+  home  mean model  p 0.4433   actual 0.5000   diff +0.0567
+  tie   mean model  p 0.1410   actual 0.1417   diff +0.0007
+  away  mean model  p 0.4157   actual 0.3583   diff -0.0573
+
+OUT-OF-SAMPLE TIME SPLIT  (train first 72 by game time, test last 48)
+  fitted on train: B_model -0.655  B_market +2.203
+  TEST log-loss  model 1.1274 | market 1.1009 | fitted pool 1.1753

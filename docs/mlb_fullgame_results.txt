@@ -1,0 +1,22 @@
+MLB FULL-GAME MODEL vs KALSHI KXMLBGAME  (de-vig = power)
+usable games: 134   skipped: {'noticker': 4, 'nosnap': 0, 'nostand': 0, 'nofinal': 0}
+
+==========================================================================
+MLB full game  vs  Kalshi closing snapshot
+==========================================================================
+  n = 134 games, 2 outcomes
+
+  B_model  = +0.157  (SE 0.835, z = +0.19)
+  B_market = +0.971  (SE 0.610, z vs 1.0 = -0.05)
+  implied blend weight on model  w = 0.139
+
+  log-loss   base rate     0.6860
+             model alone   0.6824
+             market alone  0.6728   <-- the bar
+             50/50 pool    0.6750
+             fitted pool   0.6727
+
+  in-sample gain of fitted pool over market alone: +0.0002 nats
+  VERDICT: B_model is not distinguishable from zero.
+           No evidence the model adds information over the price.
+  straight-up accuracy: model 0.582 | market 0.604 | home base 0.560
