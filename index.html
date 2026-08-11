@@ -597,6 +597,7 @@
   <div class="nav-head">Sections</div>
   <button class="nav-item active" data-view="mlb" onclick="switchView('mlb')">⚾ MLB Today</button>
   <button class="nav-item" data-view="wnba" onclick="switchView('wnba')">🏀 WNBA Today</button>
+  <button class="nav-item" data-view="nfl" onclick="switchView('nfl')">🏈 NFL</button>
   <button class="nav-item" data-view="fv" onclick="switchView('fv')">📋 Fair Value</button>
 </nav>
 
@@ -617,6 +618,7 @@
 </details>
 
 <div id="mlb-view">
+  <div class="view-intro">⚾ <b>MLB Today</b> · Consensus of model + Vegas + ESPN + Kalshi, with a projected score · Model: logistic regression on <b>7,300 real games 2022–24</b> (57.2% walk-forward, Platt auto-calibrated) · <b>Measured against the market and it does not beat it</b> — 58.2% vs the Kalshi price's 60.4% over 134 replayed games, so these are predictions, not bets. Live prices live on the Fair Value Board.</div>
 <div id="yday-record" style="display:none"></div>
 <div id="nn-stats-bar" title="Click to show/hide the live track record">&#x1F9E0; Real-Data Model · Loading…</div>
 <div id="track-record" style="display:none"></div>
@@ -648,6 +650,19 @@
       </div>
     </div>
     <div id="wnba-games" style="display:flex;flex-direction:column;gap:12px"></div>
+  </main>
+</div>
+
+<!-- ── NFL VIEW ──
+     Market-only by design. There is no NFL model and there should not be one:
+     the three models that were measured all lost to the price, so shipping a
+     fourth would be decoration. This view shows what the book posted and what
+     it means once the vig is removed, in the same card shape as WNBA. -->
+<div id="nfl-view" style="display:none">
+  <div class="view-intro">🏈 <b>NFL</b> · <b>Market only — no model, and that is deliberate.</b> Every prediction model on this site was measured against the closing price and none of them beat it, so this view shows the DraftKings line and its de-vigged fair value rather than a forecast. "Need" is the worst price still worth taking.</div>
+  <main>
+    <div id="nfl-status" role="status" aria-live="polite" style="text-align:center;padding:30px;color:var(--dim)">Loading NFL lines…</div>
+    <div id="nfl-games" style="display:flex;flex-direction:column;gap:12px"></div>
   </main>
 </div>
 
@@ -705,12 +720,19 @@ function switchView(v){
   document.getElementById('mlb-view').style.display  = v==='mlb'?'':'none';
   document.getElementById('wnba-view').style.display = v==='wnba'?'':'none';
   document.getElementById('fv-view').style.display   = v==='fv'?'':'none';
-  const ICON={mlb:'⚾',wnba:'🏀',fv:'📋'}, NAME={mlb:'MLB Today',wnba:'WNBA Today',fv:'Fair Value'};
+  document.getElementById('nfl-view').style.display  = v==='nfl'?'':'none';
+  const ICON={mlb:'⚾',wnba:'🏀',nfl:'🏈',fv:'📋'},
+        NAME={mlb:'MLB Today',wnba:'WNBA Today',nfl:'NFL',fv:'Fair Value'};
   document.getElementById('hdr-logo').textContent    = ICON[v]||'⚾';
   document.getElementById('hdr-title').textContent   = NAME[v]||'MLB Today';
   document.querySelectorAll('.nav-item').forEach(b=>b.classList.toggle('active',b.dataset.view===v));
   toggleMenu();
   if(v==='wnba'){ stopLiveScorePolling(); if(!wnbaLoaded){ wnbaLoaded=true; WNBA.load(); } }
+  else if(v==='nfl'){
+    stopLiveScorePolling();
+    fvFetchFootball().then(renderNFL).catch(()=>renderNFL());
+    renderNFL();
+  }
   else if(v==='fv'){
     stopLiveScorePolling();
     // The board reads whatever the two model views have already priced, and
@@ -724,6 +746,7 @@ function switchView(v){
 }
 function refreshActiveView(){
   if(ACTIVE_VIEW==='wnba') return WNBA.load();
+  if(ACTIVE_VIEW==='nfl')  return fvFetchFootball(true).then(renderNFL).catch(()=>renderNFL());
   if(ACTIVE_VIEW==='fv')   return Promise.all([
     Promise.resolve(WNBA.load()).catch(()=>{}),
     fvFetchFootball(true).catch(()=>{}),
@@ -788,6 +811,17 @@ async function fvFetchFootball(force){
           fairHome:dv?dv[0]:null, source:(o.provider?.name||'Book')+' (de-vigged)',
           spreadLine:spDv?_fvNum(ps.home?.close?.line):null, spreadFairHome:spDv?spDv[0]:null,
           totalLine:tDv?_fvNum(tt.over?.close?.line):null, totalFairOver:tDv?tDv[0]:null,
+          // Raw prices + names kept so the NFL view can render a card without a
+          // second fetch. The board only needs the de-vigged number; a card
+          // wants to show what the book actually posted.
+          book:o.provider?.name||'Book',
+          homeName:home.team?.shortDisplayName||home.team?.abbreviation,
+          awayName:away.team?.shortDisplayName||away.team?.abbreviation,
+          homeLogo:home.team?.logo||null, awayLogo:away.team?.logo||null,
+          homeRec:(home.records||[])[0]?.summary||null, awayRec:(away.records||[])[0]?.summary||null,
+          mlHome:mlH, mlAway:mlA,
+          spreadHomeOdds:spH, spreadAwayOdds:spA,
+          totalOverOdds:ovO, totalUnderOdds:unO,
         });
       }
     }catch(e){ /* one league failing must not blank the board */ }
@@ -801,6 +835,86 @@ async function _fvScoreboard(url){
 }
 let FV_FILTER='all';
 function fvSetFilter(v){ FV_FILTER=v; renderFairValue(); }
+
+// ═══════════════════════════════════════════════════════════════
+//  NFL VIEW — same card shape as WNBA, but market-only.
+//  The consensus bar IS the de-vigged book price, not a blend containing a
+//  prediction. Where WNBA shows a Model row, this shows nothing, because
+//  nothing here beat the price and pretending otherwise would be the exact
+//  mistake the rest of this session was spent undoing.
+// ═══════════════════════════════════════════════════════════════
+function renderNFL(){
+  const box=document.getElementById('nfl-games'), st=document.getElementById('nfl-status');
+  if(!box) return;
+  const rows=[...FV_ROWS.nfl].filter(r=>r.fairHome!=null||r.spreadFairHome!=null)
+    .sort((a,b)=>(a.start||0)-(b.start||0));
+  if(!rows.length){
+    st.style.display=''; st.textContent='No NFL lines posted yet — DraftKings has not opened this slate.'; box.innerHTML=''; return;
+  }
+  st.style.display='none';
+  const pct=p=>p==null?'—':(p*100).toFixed(0)+'%';
+  let html='';
+  for(const r of rows){
+    const d=r.start?new Date(r.start):null;
+    const when=d?d.toLocaleDateString([], {weekday:'short',month:'short',day:'numeric'})+' · '+d.toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}):'';
+    const fh=r.fairHome;
+    const pickCls=fh==null?'cp-even':(fh>0.53?'cp-home':fh<0.47?'cp-away':'cp-even');
+    const pickTxt=fh==null?'no moneyline':(fh>0.53?`${esc(r.home)} ${pct(fh)}`:fh<0.47?`${esc(r.away)} ${pct(1-fh)}`:'Toss-up');
+    const srcRow=(label,pH,detail)=>pH==null
+      ? `<div class="source-row"><div class="src-label">${label}</div><div class="src-na">not posted</div></div>`
+      : `<div class="source-row">
+           <div class="src-label">${label}</div>
+           <div class="src-away">${pct(1-pH)}</div>
+           <div class="src-bar-track"><div class="src-bar-away" style="width:${(1-pH)*100}%"></div><div class="src-bar-home"></div></div>
+           <div class="src-home">${pct(pH)}</div>
+           <div class="src-detail">${detail||''}</div>
+         </div>`;
+    const need=p=>p==null?'—':fvAmer(breakEvenAmerican(p));
+    html+=`
+    <div class="game-card gc-pre">
+      <div class="card-header">
+        <div class="team-side away">
+          <div class="team-logo-name">${r.awayLogo?`<img src="${esc(r.awayLogo)}" alt="" width="26" height="26" loading="lazy">`:''}<span>${esc(r.awayName||r.away)}</span></div>
+          <div class="team-record">${esc(r.awayRec||'')}</div>
+        </div>
+        <div class="game-center">
+          <div class="at-badge">@</div>
+          <div class="game-time">${esc(when)}</div>
+          <div class="mkt-status-badge badge-live-mkt">${esc(r.book||'Book')}</div>
+        </div>
+        <div class="team-side home">
+          <div class="team-logo-name">${r.homeLogo?`<img src="${esc(r.homeLogo)}" alt="" width="26" height="26" loading="lazy">`:''}<span>${esc(r.homeName||r.home)}</span></div>
+          <div class="team-record">${esc(r.homeRec||'')}</div>
+        </div>
+      </div>
+      <div class="consensus-block">
+        <div class="consensus-header">
+          <div class="consensus-title">📈 Market fair value <span style="font-weight:400;opacity:.6;font-size:.6rem">de-vigged · no model</span></div>
+          <div class="consensus-pick ${pickCls}">${pickTxt}</div>
+        </div>
+        ${fh!=null?`<div class="consensus-bar-row">
+          <div class="cb-abbr away">${esc(r.away)}</div>
+          <div class="consensus-bar-track"><div class="cbar-away" style="width:${(1-fh)*100}%"></div><div class="cbar-home"></div></div>
+          <div class="cb-abbr home">${esc(r.home)}</div>
+        </div>
+        <div class="consensus-vals"><div class="cv away">${pct(1-fh)}</div><div class="cv home">${pct(fh)}</div></div>
+        <div class="wnba-proj">Need <b>${need(1-fh)}</b> on ${esc(r.away)} · <b>${need(fh)}</b> on ${esc(r.home)}</div>`
+        :`<div class="wnba-proj">DraftKings has not posted a moneyline for this game.</div>`}
+      </div>
+      <div class="sources-panel">
+        ${srcRow('💰 '+esc(r.book||'Book'), fh, r.mlHome!=null?`${fmtML(r.mlAway)} / ${fmtML(r.mlHome)}`:'')}
+      </div>
+      <div class="qtr-block">
+        <div class="qtr-hdr"><span class="qtr-title">📐 Lines</span><span class="qtr-note">fair % and the worst price still worth taking</span></div>
+        <div class="qtr-scroll"><table class="qtr-table" style="min-width:0"><thead><tr><th>Market</th><th>Line</th><th>Fair</th><th>Need</th></tr></thead><tbody>
+          ${r.spreadFairHome!=null?`<tr><td>Spread ${esc(r.home)}</td><td>${fvLine(r.spreadLine)}</td><td>${(r.spreadFairHome*100).toFixed(1)}%</td><td>${need(r.spreadFairHome)}</td></tr>`:''}
+          ${r.totalFairOver!=null?`<tr><td>Over</td><td>${r.totalLine}</td><td>${(r.totalFairOver*100).toFixed(1)}%</td><td>${need(r.totalFairOver)}</td></tr>`:''}
+        </tbody></table></div>
+      </div>
+    </div>`;
+  }
+  box.innerHTML=html;
+}
 
 // ═══════════════════════════════════════════════════════════════
 //  FV BET LEDGER
@@ -2930,17 +3044,24 @@ function renderGame(game, extras){
     </div>`;
   }
 
-  // ── FIRST 5 INNINGS — headline prediction (3-way: away-lead / tie / home-lead) ──
+  // ── FIRST 5 INNINGS — 3-way: away-lead / tie / home-lead ──
+  // Demoted from headline to below the consensus and sources on 2026-08-10. It
+  // led the card for two months, but it was measured and closed for betting
+  // (log-loss 1.0137 vs 0.9889 for the price and 0.9912 for the base rate; CLV
+  // −0.87pp at z=−2.65), so it has no business being the first thing you read.
+  // Rendered into a variable and interpolated further down rather than pushed
+  // straight onto `html`, which keeps the diff to the ordering.
+  let f5Html='';
   if(f5){
     const fa=Math.round(f5.a*100), ft=Math.round(f5.t*100), fh=Math.round(f5.h*100);
     const f5HomeFav=f5.h>f5.a;
     const f5Pick = Math.abs(f5.h-f5.a)<0.04
       ? `<span class="consensus-pick cp-even">Too Close</span>`
       : `<span class="consensus-pick ${f5HomeFav?'cp-home':'cp-away'}">Favors ${f5HomeFav?homeAbbr:awayAbbr}</span>`;
-    html += `
-    <div class="consensus-block" style="border-color:#3a6ea5">
+    f5Html = `
+    <div class="consensus-block" style="border-color:#3a6ea5;opacity:.8">
       <div class="consensus-header">
-        <span class="consensus-title">&#x26BE; First 5 Innings <span style="font-weight:400;opacity:.6;font-size:.6rem">model · lead / tie / lead</span></span>
+        <span class="consensus-title" style="color:var(--dim)">&#x26BE; First 5 Innings <span style="font-weight:400;opacity:.6;font-size:.6rem">paper only · lead / tie / lead</span></span>
         ${f5Pick}
       </div>
       <div class="consensus-bar-row">
@@ -2967,9 +3088,9 @@ function renderGame(game, extras){
   }
 
   html += `
-    <div class="consensus-block" style="opacity:.78">
+    <div class="consensus-block">
       <div class="consensus-header">
-        <span class="consensus-title" style="color:var(--dim)">Full game (reference) <span style="font-weight:400;opacity:.6;font-size:.6rem">${sourceCount} source${sourceCount!==1?'s':''}</span></span>
+        <span class="consensus-title">&#x1F3AF; Consensus <span style="font-weight:400;opacity:.6;font-size:.6rem">${sourceCount} source${sourceCount!==1?'s':''}</span></span>
         ${consPickHtml}
       </div>
       <div class="consensus-bar-row">
@@ -3006,6 +3127,8 @@ function renderGame(game, extras){
         mktHomeP!=null?1-mktHomeP:null,mktHomeP,kalshiDetail,
         'linear-gradient(90deg,#4c1d95,#7c3aed)','linear-gradient(90deg,#3b0764,#a855f7)'):''}
     </div>
+
+    ${f5Html}
 
     <div class="edge-row">
       <div class="edge-left">
