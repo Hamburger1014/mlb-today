@@ -2507,8 +2507,13 @@ function renderGame(game, extras){
     // de-vigged quotes on the same game is the only model-free edge signal this
     // site can compute automatically — where they disagree, one of them is
     // buyable. Discarding the second source threw that away.
-    const fairSharp = _so ? _so.fairHome : null;   // Pinnacle/consensus reference
-    const fairBook   = (fairHomeSharp!=null)?fairHomeSharp:null;
+    // Two DIFFERENT numbers, from the same feed and the same instant:
+    //   fairSharp = the field's opinion, DraftKings excluded (the reference)
+    //   fairBook  = DraftKings itself (the price actually paid)
+    // Falls back to ESPN's DraftKings line if the odds feed has no DK entry.
+    const fairSharp = _so ? _so.fairHome : null;
+    const fairBook  = (_so && _so.dkHome!=null) ? _so.dkHome
+                    : ((odds && odds.homeP!=null) ? odds.homeP : null);
     if(fairHomeSharp!=null){
       fairHome=fairHomeSharp;
       source=_so?`${_so.nBooks}-book consensus`:'DraftKings (de-vigged)';
@@ -2944,7 +2949,7 @@ async function fetchSharpOdds(sport='mlb'){
       // better fair value than a median that includes soft books. Otherwise
       // take the median across books, which is more robust than a mean when one
       // book is stale.
-      let pin=null; const fairs=[];
+      let pin=null, dk=null; const others=[];
       for(const bk of (g.bookmakers||[])){
         const mk=(bk.markets||[]).find(m=>m.key==='h2h'); if(!mk) continue;
         const ho=mk.outcomes.find(o=>o.name===g.home_team), ao=mk.outcomes.find(o=>o.name===g.away_team);
@@ -2954,16 +2959,24 @@ async function fetchSharpOdds(sport='mlb'){
         const dv=devigPower([1/ho.price, 1/ao.price]);
         if(!dv) continue;
         if(bk.key==='pinnacle') pin=dv[0];
-        fairs.push(dv[0]);
+        // DraftKings is the EXECUTION price, not part of the reference. Folding
+        // it into the consensus it is being judged against drags every gap
+        // toward zero — which is exactly what happened on the first run: all 15
+        // games reported a 0.00pp difference because both sides of the
+        // comparison were the same number.
+        if(bk.key==='draftkings'){ dk=dv[0]; continue; }
+        others.push(dv[0]);
       }
-      if(!fairs.length) continue;
-      fairs.sort((x,y)=>x-y);
-      const med=fairs.length%2 ? fairs[(fairs.length-1)/2]
-                               : (fairs[fairs.length/2-1]+fairs[fairs.length/2])/2;
+      if(!others.length) continue;
+      others.sort((x,y)=>x-y);
+      const med=others.length%2 ? others[(others.length-1)/2]
+                                : (others[others.length/2-1]+others[others.length/2])/2;
       const key=normName(g.home_team)+'|'+normName(g.away_team);
       (map[key]=map[key]||[]).push({
-        fairHome: pin!=null?pin:med, nBooks: fairs.length,
-        pinnacle: pin!=null, commence: Date.parse(g.commence_time),
+        fairHome: pin!=null?pin:med,   // reference: Pinnacle, else median of the field
+        dkHome: dk,                    // what you will actually be charged
+        nBooks: others.length, pinnacle: pin!=null,
+        commence: Date.parse(g.commence_time),
       });
     }
     sharpOdds=map;
