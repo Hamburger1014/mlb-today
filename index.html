@@ -731,7 +731,8 @@ function switchView(v){
   if(v==='wnba'){ stopLiveScorePolling(); if(!wnbaLoaded){ wnbaLoaded=true; WNBA.load(); } }
   else if(v==='nfl'){
     stopLiveScorePolling();
-    fvFetchFootball().then(renderNFL).catch(()=>renderNFL());
+    Promise.all([fvFetchFootball().catch(()=>{}), loadFootballLines().catch(()=>{})])
+      .then(renderNFL).catch(()=>renderNFL());
     renderNFL();
   }
   else if(v==='fv'){
@@ -747,7 +748,8 @@ function switchView(v){
 }
 function refreshActiveView(){
   if(ACTIVE_VIEW==='wnba') return WNBA.load();
-  if(ACTIVE_VIEW==='nfl')  return fvFetchFootball(true).then(renderNFL).catch(()=>renderNFL());
+  if(ACTIVE_VIEW==='nfl')  return Promise.all([fvFetchFootball(true).catch(()=>{}), loadFootballLines().catch(()=>{})])
+    .then(renderNFL).catch(()=>renderNFL());
   if(ACTIVE_VIEW==='fv')   return Promise.all([
     Promise.resolve(WNBA.load()).catch(()=>{}),
     fvFetchFootball(true).catch(()=>{}),
@@ -914,7 +916,7 @@ function renderNFL(){
       </div>
     </div>`;
   }
-  box.innerHTML=html;
+  box.innerHTML=fbClvHtml('NFL')+html;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -3551,6 +3553,79 @@ function wireGameControls(container, ctrls){
 // scheduled Action. The on-page "Realized" line above it comes from THIS
 // browser's localStorage and also blends bets made before the July-31 Poisson
 // fix; this line is browser-independent and post-fix only.
+// ── FOOTBALL CLOSING LINES (for bet-level CLV) ───────────────────────────────
+// The football views are market-only: no model, therefore no model-CLV. What
+// does exist is BET-level CLV — for a wager in the ledger, did the price taken
+// beat the price the market closed at? scripts/football_log.py captures the
+// closes; the join happens here so the server never learns what was bet.
+let FB_LINES=null;
+async function loadFootballLines(){
+  try{
+    const r=await fetch('data/football_lines.json?cb='+Date.now());
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    FB_LINES=(await r.json()).games||null;
+  }catch(e){ FB_LINES=null; }
+}
+// Moneyline CLV is unambiguous: compare the raw implied probability of the same
+// side at both ends. No de-vig — you are comparing two prices for one bet.
+// Spread and total CLV are NOT reducible to juice, because the line itself
+// moves: taking +7.5 and closing at +6.5 is a full point of value that a juice
+// comparison would miss entirely. Those are reported in POINTS, the way the
+// line is actually quoted, rather than forced into a probability.
+function fvBetClv(b){
+  if(!FB_LINES || (b.league!=='NFL' && b.league!=='CFB')) return null;
+  const g=FB_LINES[String(b.gameId)];
+  if(!g||!g.closing||b.got==null) return null;
+  const c=g.closing;
+  if(b.market==='ML'){
+    const close=b.sideIsHome?c.mlHome:c.mlAway;
+    if(close==null) return null;
+    return {kind:'ml', pp:(mlToRawProb(close)-mlToRawProb(b.got))*100};
+  }
+  if(b.market==='SPREAD'){
+    if(c.spHomeLine==null||b.line==null) return null;
+    // Board spreads are always the HOME side. Better for a home backer means a
+    // line that lays FEWER points, i.e. a larger signed value: taking -3.5 when
+    // it closes -4.5 is +1. Getting this backwards reports the exact opposite
+    // of the truth, so the direction is spelled out rather than inferred.
+    return {kind:'pts', pts:b.line-c.spHomeLine,
+            juice:(c.spHomeOdds!=null)?(mlToRawProb(c.spHomeOdds)-mlToRawProb(b.got))*100:null};
+  }
+  if(b.market==='TOTAL'){
+    if(c.totalLine==null||b.line==null) return null;
+    // The board only offers the OVER, and a lower number is easier to clear, so
+    // better means the line you took is BELOW the close: took 43.5, closed 44.5
+    // is +1.
+    return {kind:'pts', pts:c.totalLine-b.line,
+            juice:(c.overOdds!=null)?(mlToRawProb(c.overOdds)-mlToRawProb(b.got))*100:null};
+  }
+  return null;
+}
+function fbClvHtml(league){
+  const bets=FV_BETS.filter(b=>b.league===league);
+  if(!bets.length)
+    return `<div class="bb-foot" style="padding:10px 18px">&#x1F4C8; <b>Closing line value</b> &nbsp;&middot;&nbsp; <span style="color:var(--dim2)">no ${esc(league)} bets logged yet. Log one from the Fair Value Board and this compares the price you took against the price the market closed at.</span></div>`;
+  const ml=[], pts=[];
+  for(const b of bets){
+    const c=fvBetClv(b);
+    if(!c) continue;
+    (c.kind==='ml'?ml:pts).push(c);
+  }
+  if(!ml.length && !pts.length)
+    return `<div class="bb-foot" style="padding:10px 18px">&#x1F4C8; <b>Closing line value</b> &nbsp;&middot;&nbsp; <span style="color:var(--dim2)">${bets.length} ${esc(league)} bet${bets.length>1?'s':''} logged, none of their games has closed yet.</span></div>`;
+  const parts=[];
+  if(ml.length){
+    const avg=ml.reduce((s,x)=>s+x.pp,0)/ml.length, beat=ml.filter(x=>x.pp>0).length;
+    parts.push(`moneyline <b class="${avg>=0?'track-good':'track-bad'}">${avg>=0?'+':''}${avg.toFixed(2)}pp</b> avg &middot; beat the close <b>${Math.round(beat/ml.length*100)}%</b> of ${ml.length}`);
+  }
+  if(pts.length){
+    const avg=pts.reduce((s,x)=>s+x.pts,0)/pts.length, beat=pts.filter(x=>x.pts>0).length;
+    parts.push(`spread/total <b class="${avg>=0?'track-good':'track-bad'}">${avg>=0?'+':''}${avg.toFixed(2)} pts</b> avg &middot; beat the close <b>${Math.round(beat/pts.length*100)}%</b> of ${pts.length}`);
+  }
+  return `<div class="bb-foot" style="padding:10px 18px">&#x1F4C8; <b>Closing line value</b> &nbsp;&middot;&nbsp; ${parts.join(' &nbsp;&middot;&nbsp; ')}`
+    + `<br><span style="color:var(--dim2)">Beating the close is the whole game on a market-only page: there is no model here to be right, only a price to be better than. Spreads and totals are in points because the line moves, and a point of line is worth far more than the juice.</span></div>`;
+}
+
 // ── CLOSING LINE VALUE ───────────────────────────────────────────────────────
 // Written by scripts/mlb_log.py on the scheduled job, so it is identical for
 // every visitor and survives independently of any browser's localStorage.
