@@ -3515,7 +3515,10 @@ function cardCandidates(){
   const add=(league,row,sideHome,pFair,pPrice,kind,note,priceAmer)=>{
     if(pFair==null||pPrice==null||pPrice<=0.02||pPrice>=0.98) return;
     const raw=pFair-pPrice;
-    const edge=raw*(kind==='CROSS'?CARD_CROSS_SHRINK:CARD_MODEL_SHRINK)-_cardCost(pPrice);
+    // Shrink by kind; subtract an exchange fee only where one is actually
+    // charged. A sportsbook's cost is already inside the price above.
+    const shrink=(kind==='MODEL')?CARD_MODEL_SHRINK:CARD_CROSS_SHRINK;
+    const edge=raw*shrink-(kind==='CROSS'?_cardCost(pPrice):0);
     if(edge<CARD_MIN_EDGE) return;
     const b=(1-pPrice)/pPrice;
     const kelly=b>0?Math.max(0,(pFair*(b+1)-1)/b):0;
@@ -3550,9 +3553,16 @@ function cardCandidates(){
     const sharp=row.fairSharp, bk=row.fairBook;
     if(sharp==null||bk==null) continue;
     const note=(row.sharpIsPinnacle?'Pinnacle':`${row.sharpBooks||0}-book`)+' vs DraftKings';
-    // Home side: worth `sharp`, priced at `bk`. Only a bet when DK is cheaper.
-    if(sharp>bk) add(row.league,row,true, sharp,bk,'CROSS',note,row.bookHomeML);
-    if((1-sharp)>(1-bk)) add(row.league,row,false, 1-sharp,1-bk,'CROSS',note,row.bookAwayML);
+    // PRICE MUST BE THE VIGGED NUMBER YOU ACTUALLY PAY. Comparing a de-vigged
+    // fair against a de-vigged price silently assumes you get the no-vig
+    // number, which no book offers — it made the bar look easier than it is.
+    // The old Kalshi fee term was a stand-in for trading cost; on a sportsbook
+    // the cost IS the vig, so it comes from the posted price instead and the
+    // fee is not applied twice.
+    const rawH=(row.bookHomeML!=null)?mlToRawProb(row.bookHomeML):null;
+    const rawA=(row.bookAwayML!=null)?mlToRawProb(row.bookAwayML):null;
+    if(rawH!=null && sharp>rawH) add(row.league,row,true, sharp,rawH,'BOOK',note,row.bookHomeML);
+    if(rawA!=null && (1-sharp)>rawA) add(row.league,row,false, 1-sharp,rawA,'BOOK',note,row.bookAwayML);
   }
 
   // model plays: only where weight was earned against the price

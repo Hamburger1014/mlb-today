@@ -110,14 +110,97 @@ def breakeven_american(p):
 
 # ── price sources ─────────────────────────────────────────────────────
 
-def second_source():
-    """The second price source for cross-book. There isn't one any more.
+ODDS_PROXY = "https://mlb-kalshi.gabrielhiginio2005.workers.dev"
 
-    This returned de-vigged Kalshi prices. Kalshi is gone and ESPN relays only
-    DraftKings, so returning empty makes every cross-book path a no-op without
-    deleting logic that is otherwise correct and source-agnostic.
+
+def sharp_reference(sport="mlb"):
+    """The field's price, DraftKings EXCLUDED, plus DraftKings on its own.
+
+    Read through the same Cloudflare Worker the page uses, so the API key stays
+    a server-side secret and this script needs no credentials. Keyed by the
+    normalised team pair.
+
+    DraftKings is deliberately kept out of the consensus it is judged against —
+    including it drags every gap toward zero in proportion to its weight.
     """
-    return {}, None
+    out = {}
+    try:
+        d = get(f"{ODDS_PROXY}/?odds={sport}")
+    except Exception as e:
+        print(f"  ! sharp odds ({sport}): {e}")
+        return out, None
+    for g in d if isinstance(d, list) else []:
+        pin = dk = None
+        others = []
+        for bk in g.get("bookmakers", []) or []:
+            mk = next((m for m in bk.get("markets", []) if m.get("key") == "h2h"), None)
+            if not mk:
+                continue
+            ho = next((o for o in mk.get("outcomes", []) if o.get("name") == g.get("home_team")), None)
+            ao = next((o for o in mk.get("outcomes", []) if o.get("name") == g.get("away_team")), None)
+            if not ho or not ao or not ho.get("price") or not ao.get("price"):
+                continue
+            dv = devig_power([1 / ho["price"], 1 / ao["price"]])
+            if not dv:
+                continue
+            if bk.get("key") == "pinnacle":
+                pin = dv[0]
+            if bk.get("key") == "draftkings":
+                dk = dv[0]
+                dk_home_ml, dk_away_ml = ho["price"], ao["price"]
+                continue
+            others.append(dv[0])
+        if not others or dk is None:
+            continue
+        others.sort()
+        n = len(others)
+        med = others[n // 2] if n % 2 else (others[n // 2 - 1] + others[n // 2]) / 2
+        # Teams play multi-game series and this feed spans several days, so a
+        # team-pair key COLLIDES across dates. Keying by pair alone silently
+        # priced tonight's DraftKings line against tomorrow's game and produced
+        # a 7.6pp edge that did not exist. Store every occurrence; the caller
+        # picks by kickoff time.
+        key = norm_name(g.get("home_team")) + "|" + norm_name(g.get("away_team"))
+        out.setdefault(key, []).append({
+            "fairHome": pin if pin is not None else med,
+            "dkHome": dk, "nBooks": n, "pinnacle": pin is not None,
+            "commence": g.get("commence_time"),
+        })
+    return out, None
+
+
+def pick_by_time(entries, start_iso):
+    """The occurrence closest in time to the game we are actually pricing."""
+    if not entries:
+        return None
+    if len(entries) == 1 or not start_iso:
+        return entries[0]
+    def ts(x):
+        try:
+            return datetime.fromisoformat((x or "").replace("Z", "+00:00")).timestamp()
+        except Exception:
+            return None
+    t0 = ts(start_iso)
+    if t0 is None:
+        return entries[0]
+    best, bd = None, None
+    for e in entries:
+        t = ts(e.get("commence"))
+        if t is None:
+            continue
+        d = abs(t - t0)
+        if bd is None or d < bd:
+            best, bd = e, d
+    # More than 12h away is a different game, not a line move.
+    return best if (bd is not None and bd <= 12 * 3600) else None
+
+
+def norm_name(s):
+    return "".join(ch for ch in (s or "").lower() if ch.isalnum())
+
+
+def dec_to_prob(dec):
+    return 1.0 / dec if dec else None
 
 
 def dk_mlb():
@@ -152,6 +235,8 @@ def dk_mlb():
         aab = (a.get("team") or {}).get("abbreviation")
         out["|".join(sorted([hab, aab]))] = {
             "home": hab, "away": aab, "fairHome": dv[0],
+            "homeName": (h.get("team") or {}).get("displayName"),
+            "awayName": (a.get("team") or {}).get("displayName"),
             "homeML": hml, "awayML": aml,
             "gameId": ev["id"], "start": ev.get("date"),
         }
@@ -180,7 +265,9 @@ def candidates():
         if p_fair is None or p_price is None or not (0.02 < p_price < 0.98):
             return
         raw = p_fair - p_price
-        shrink = CARD_CROSS_SHRINK if kind == "CROSS" else CARD_MODEL_SHRINK
+        # Shrink by kind; subtract an exchange fee only where one is charged. A
+        # sportsbook's cost is the vig, which is already inside p_price.
+        shrink = CARD_MODEL_SHRINK if kind == "MODEL" else CARD_CROSS_SHRINK
         edge = raw * shrink - (cost(p_price) if kind == "CROSS" else 0.0)
         if edge < CARD_MIN_EDGE:
             return
@@ -196,30 +283,27 @@ def candidates():
             "edge": round(edge, 4), "kelly": min(0.05, KELLY_FRACTION * kelly),
         })
 
-    # ── cross-book: MLB (Kalshi vs DraftKings) ──
-    kal, age = second_source()
-    fresh = age is None or age <= CARD_MAX_STALE_MIN
-    if not fresh:
-        print(f"  cross-book suppressed: price snapshot {age:.0f} min old")
-    if fresh and kal:
-        for key, dk in dk_mlb().items():
-            k = kal.get(norm_pair(dk["home"], dk["away"]))
-            if not k:
+    # ── BOOK: the field's price vs DraftKings, the venue actually bet ──
+    # Fair is the consensus with DraftKings EXCLUDED; price is the VIGGED
+    # DraftKings number, because that is what gets charged. No exchange fee is
+    # subtracted — a sportsbook's cost is the vig, already inside the price.
+    sharp, _ = sharp_reference("mlb")
+    if sharp:
+        for _key, dkg in dk_mlb().items():
+            ref = pick_by_time(
+                sharp.get(norm_name(dkg.get("homeName")) + "|" + norm_name(dkg.get("awayName"))),
+                dkg.get("start"))
+            if not ref:
                 continue
-            kh = k.get(ESPN_TO_STATS.get(dk["home"], dk["home"]))
-            if kh is None:
-                continue
-            bk = dk["fairHome"]
-            for side_home in (True, False):
-                kp = kh if side_home else 1 - kh
-                bp = bk if side_home else 1 - bk
-                amer = (dk["homeML"] if side_home else dk["awayML"])
-                if bp > kp:
-                    add("MLB", dk["gameId"], "espn", dk["home"], dk["away"], dk["start"],
-                        side_home, bp, kp, "CROSS", "Kalshi cheap vs book")
-                elif kp > bp:
-                    add("MLB", dk["gameId"], "espn", dk["home"], dk["away"], dk["start"],
-                        side_home, kp, bp, "CROSS", "Book cheap vs Kalshi", amer)
+            f = ref["fairHome"]
+            note = ("Pinnacle" if ref["pinnacle"] else f"{ref['nBooks']}-book") + " vs DraftKings"
+            raw_h, raw_a = ml_to_raw(dkg["homeML"]), ml_to_raw(dkg["awayML"])
+            if f > raw_h:
+                add("MLB", dkg["gameId"], "espn", dkg["home"], dkg["away"], dkg["start"],
+                    True, f, raw_h, "BOOK", note, dkg["homeML"])
+            if (1 - f) > raw_a:
+                add("MLB", dkg["gameId"], "espn", dkg["home"], dkg["away"], dkg["start"],
+                    False, 1 - f, raw_a, "BOOK", note, dkg["awayML"])
 
     # ── WNBA: cross-book AND model, both from the log this job already wrote ──
     wp = os.path.join(ROOT, "data", "wnba_predictions.json")
@@ -238,7 +322,7 @@ def candidates():
             dv = devig_power([ml_to_raw(v["homeML"]), ml_to_raw(v["awayML"])]) if v else None
             bk = dv[0] if dv else None
             # cross-book
-            if fresh and bk is not None and kg is not None:
+            if False and bk is not None and kg is not None:   # WNBA sharp feed pending
                 for side_home in (True, False):
                     kp = kg if side_home else 1 - kg
                     bp = bk if side_home else 1 - bk

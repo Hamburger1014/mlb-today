@@ -57,10 +57,19 @@ for label, hp, pp in [
 
 # Shape guard: both sides must apply the shrink per KIND. Collapsing them back
 # to one factor is the specific mistake that made cross-book dead on arrival.
-if "kind==='CROSS'?CARD_CROSS_SHRINK:CARD_MODEL_SHRINK" not in SRC.replace(" ", ""):
+# Regex rather than an exact substring: the page writes the condition with
+# parentheses and a literal match broke on a purely cosmetic edit, which is a
+# false alarm the gate should not raise.
+if not re.search(r"kind===?'MODEL'\)?\?CARD_MODEL_SHRINK:CARD_CROSS_SHRINK", SRC.replace(" ", "")):
     errs.append("index.html no longer picks the shrink by candidate kind")
-if 'CARD_CROSS_SHRINK if kind == "CROSS" else CARD_MODEL_SHRINK' not in LOG:
+if 'CARD_MODEL_SHRINK if kind == "MODEL" else CARD_CROSS_SHRINK' not in LOG:
     errs.append("card_log.py no longer picks the shrink by candidate kind")
+# A sportsbook bet must not be charged an exchange fee on top of the vig that is
+# already inside its price. Both copies must gate the fee on kind.
+if 'kind===\'CROSS\'?_cardCost(pPrice):0' not in SRC.replace(" ", ""):
+    errs.append("index.html applies the exchange fee to non-exchange bets")
+if 'cost(p_price) if kind == "CROSS" else 0.0' not in LOG:
+    errs.append("card_log.py applies the exchange fee to non-exchange bets")
 
 if errs:
     print("Card parity FAILED:")
