@@ -52,7 +52,6 @@
       font-size:.72rem;padding:4px 9px;border-radius:6px;font-weight:700;letter-spacing:.04em;
     }
     .badge-espn{background:rgba(232,122,23,.15);border:1px solid rgba(232,122,23,.35);color:#fb923c}
-    .badge-kalshi{background:rgba(168,85,247,.15);border:1px solid rgba(168,85,247,.35);color:#c084fc}
 
     /* ── Legend (collapsed by default — see the <details> in the markup) ── */
     .legend{
@@ -358,11 +357,6 @@
     .src-espn .src-home{color:#34d399}
 
     /* market source colors */
-    .src-kalshi .src-label{color:#c084fc}
-    .src-kalshi .src-bar-away{background:linear-gradient(90deg,#4c1d95,#7c3aed)}
-    .src-kalshi .src-bar-home{background:linear-gradient(90deg,#3b0764,#a855f7)}
-    .src-kalshi .src-away{color:#c084fc}
-    .src-kalshi .src-home{color:#c084fc}
 
     /* ── Edge row ── */
     .edge-row{
@@ -398,13 +392,9 @@
     .sr-home{text-align:right;font-weight:600}
     .sr-lbl{text-align:center;color:var(--dim);font-size:.7rem}
     .sr-better{color:var(--green)}
-    .kalshi-detail{background:var(--card);border:1px solid rgba(168,85,247,.25);border-radius:10px;padding:12px;margin-top:4px}
-    .kalshi-detail h4{color:#c084fc;font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px}
     .kd-row{display:flex;justify-content:space-between;font-size:.8rem;padding:3px 0}
     .kd-row span:first-child{color:var(--dim)}
     .detail-cta{display:flex;align-items:center;gap:8px;margin-top:12px;padding-top:12px;border-top:1px solid var(--border);font-size:.78rem;color:var(--dim)}
-    .kalshi-link{background:rgba(168,85,247,.15);border:1px solid rgba(168,85,247,.3);color:#c084fc;padding:5px 12px;border-radius:8px;font-size:.78rem;font-weight:600;text-decoration:none;display:inline-flex;align-items:center;gap:4px}
-    .kalshi-link:hover{background:rgba(168,85,247,.25)}
 
     /* ── No games ── */
     .no-games{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:40px;text-align:center;color:var(--dim)}
@@ -568,7 +558,7 @@
       #rec-detail { display:block !important; }
       .consensus-block { background:#f2f7fd !important; border-color:#c3d6ee !important; }
       .best-bets { background:#f2fbf5 !important; }
-      .card-detail, .detail-stat, .kalshi-detail { background:#f7fafc !important; }
+      .card-detail, .detail-stat { background:#f7fafc !important; }
       .consensus-bar-track, .src-bar-track { background:#e2e8f0 !important; }
       /* hide interactive-only chrome from the printout */
       .refresh-btn, #hamburger, .expand-hint, .game-controls, .nn-log-row, .rec-more { display:none !important; }
@@ -592,7 +582,6 @@
   </div>
   <div class="hdr-right">
     <div class="hdr-badge badge-espn">📊 ESPN Odds</div>
-    <div class="hdr-badge badge-kalshi" id="kalshi-badge" title="Click to show Kalshi API debug info" style="cursor:pointer" onclick="showKalshiDebug()">📊 2 Books</div>
     <button class="refresh-btn" onclick="refreshActiveView()">↻ <span class="rb-label">Refresh</span></button>
   </div>
 </header>
