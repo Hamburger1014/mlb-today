@@ -403,8 +403,7 @@ def main():
                 "home": g["home"], "away": g["away"],
                 "model": m,
                 "vegas": g["vegas"], "spread": g["spread"],
-                "kalshi": {"game": kalshi_probs(kg.get(key), g["home"], g["away"], False),
-                           "q": [kalshi_probs(q.get(key), g["home"], g["away"], True) for q in kq]},
+
                 "injuries": {k: v for k, v in inj.items() if k in (g["home"], g["away"])},
                 "logged_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "result": None,

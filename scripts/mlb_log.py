@@ -6,7 +6,7 @@ rather than by whichever browser happened to be open, so the record survives
 independently of anyone's localStorage.
 
   LOG    - every PREGAME game gets the full-game model's home win probability
-           plus the de-vigged Kalshi KXMLBGAME price at that moment.
+           plus the de-vigged DraftKings price at that moment.
   CLOSE  - every run overwrites `closing` while a game is still pregame, so the
            last value written before first pitch IS the closing line.
   GRADE  - once final, the pick is settled from the real score.
@@ -42,7 +42,7 @@ def get(url, tries=3):
     last = None
     for i in range(tries):
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "mlb-log/1.0"})
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
             with urllib.request.urlopen(req, timeout=30) as r:
                 return json.load(r)
         except Exception as e:
@@ -157,47 +157,67 @@ def schedule(date):
     return games
 
 
-def kalshi_game():
-    """De-vigged Kalshi KXMLBGAME mid per event, keyed by sorted team pair.
-    Reads the snapshot this same workflow writes a step earlier."""
-    path = os.path.join(ROOT, "data", "kalshi_mlb.json")
-    if not os.path.exists(path):
-        return {}
-    try:
-        snap = json.load(open(path))
-    except Exception:
-        return {}
-    by_event = {}
-    for series, markets in (snap.get("markets") or {}).items():
-        if "GAME" not in series.upper():
-            continue
-        for m in markets or []:
-            by_event.setdefault(m.get("event_ticker"), []).append(m)
+def ml_to_raw(ml):
+    return 100.0 / (ml + 100.0) if ml > 0 else abs(ml) / (abs(ml) + 100.0)
 
-    def mid(m):
-        try:
-            b, a = float(m.get("yes_bid_dollars")), float(m.get("yes_ask_dollars"))
-            if 0 <= b <= 1 and 0 < a <= 1 and b <= a:
-                return (b + a) / 2
-        except (TypeError, ValueError):
-            pass
+
+def devig_power(raw):
+    """Solve sum(q^k)=1 — same de-vig the page uses."""
+    if any(x is None or x <= 0 for x in raw):
         return None
+    s = sum(raw)
+    if s <= 1:
+        return [x / s for x in raw]
+    lo, hi = 0.5, 5.0
+    for _ in range(100):
+        k = (lo + hi) / 2
+        if sum(x ** k for x in raw) > 1:
+            lo = k
+        else:
+            hi = k
+    k = (lo + hi) / 2
+    return [x ** k for x in raw]
 
+
+ESPN_TO_STATS = {"ARI": "AZ", "OAK": "ATH", "TBR": "TB", "CHW": "CWS"}
+
+
+def book_game():
+    """De-vigged DraftKings price per game, keyed by sorted statsapi team pair.
+
+    Was Kalshi. Kalshi is no longer used anywhere in this project, so the
+    closing-line series moves to the book ESPN already relays. ESPN's MLB
+    scoreboard carries structured moneylines
+    (odds[0].moneyline.home/away.close.odds), so one call covers the slate.
+    """
     out = {}
-    for ticker, mkts in by_event.items():
-        sides = {}
-        for m in mkts:
-            suf = (m.get("ticker") or "").rsplit("-", 1)[-1].upper()
-            v = mid(m)
-            if v is not None:
-                sides[suf] = v
-        if len(sides) != 2:
+    try:
+        d = get("https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard")
+    except Exception as e:
+        print(f"  ! book odds: {e}")
+        return out
+    for ev in d.get("events", []):
+        c = (ev.get("competitions") or [{}])[0]
+        o = (c.get("odds") or [None])[0]
+        if not o or not o.get("moneyline"):
             continue
-        (t1, p1), (t2, p2) = sorted(sides.items())
-        tot = p1 + p2
-        if tot <= 0:
+        h = next((t for t in c.get("competitors", []) if t.get("homeAway") == "home"), None)
+        a = next((t for t in c.get("competitors", []) if t.get("homeAway") == "away"), None)
+        if not h or not a:
             continue
-        out["|".join(sorted([t1, t2]))] = {t1: p1 / tot, t2: p2 / tot}   # de-vigged
+        try:
+            hml = float(str(((o["moneyline"].get("home") or {}).get("close") or {})["odds"]).replace("+", ""))
+            aml = float(str(((o["moneyline"].get("away") or {}).get("close") or {})["odds"]).replace("+", ""))
+        except (KeyError, TypeError, ValueError):
+            continue
+        dv = devig_power([ml_to_raw(hml), ml_to_raw(aml)])
+        if not dv:
+            continue
+        hab = ESPN_TO_STATS.get((h.get("team") or {}).get("abbreviation"),
+                                (h.get("team") or {}).get("abbreviation"))
+        aab = ESPN_TO_STATS.get((a.get("team") or {}).get("abbreviation"),
+                                (a.get("team") or {}).get("abbreviation"))
+        out["|".join(sorted([hab, aab]))] = {hab: dv[0], aab: dv[1]}
     return out
 
 
@@ -216,7 +236,7 @@ def main():
     days = [(datetime.now(timezone.utc) + timedelta(days=off)).strftime("%Y-%m-%d")
             for off in (-1, 0, 1)]
     games = [g for d in days for g in schedule(d)]
-    kal = kalshi_game()
+    kal = book_game()
     season = today[:4]
 
     kbb = load_starter_kbb([g["homeSpId"] for g in games] +
@@ -250,7 +270,7 @@ def main():
         if e is None and pregame:
             e = {"id": gid, "date": g["date"], "home": hab, "away": aab,
                  "gameDate": g["gameDate"], "model": {"home": round(p, 4)},
-                 "kalshi": {"home": round(mkt_home, 4)} if mkt_home is not None else None,
+                 "book": {"home": round(mkt_home, 4)} if mkt_home is not None else None,
                  "logged_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                  "result": None}
             entries.append(e); by_id[gid] = e; logged += 1
@@ -260,7 +280,7 @@ def main():
         # closing line: overwrite while still pregame, so the last write sticks
         if pregame and mkt_home is not None:
             e["closing"] = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                            "kalshi": {"home": round(mkt_home, 4)}}
+                            "book": {"home": round(mkt_home, 4)}}
             closed += 1
 
         if g["isFinal"] and e.get("result") is None and g["hs"] is not None:
@@ -282,8 +302,8 @@ def main():
     # difference is the number that answers the question.
     clv, ctrl = [], []
     for e in entries:
-        c, k0 = e.get("closing"), e.get("kalshi")
-        if not c or not k0 or not c.get("kalshi"):
+        c, k0 = e.get("closing"), (e.get("book") or e.get("kalshi"))
+        if not c or not k0 or not (c.get("book") or c.get("kalshi")):
             continue
         # On the first run of a slate the closing capture and the log-time
         # capture are the SAME snapshot, so every delta is exactly 0 and the
@@ -293,12 +313,13 @@ def main():
             continue
         side_home = e["model"]["home"] >= 0.5
         p0 = k0["home"] if side_home else 1 - k0["home"]
-        p1 = c["kalshi"]["home"] if side_home else 1 - c["kalshi"]["home"]
+        c1 = (c.get("book") or c.get("kalshi"))["home"]
+        p1 = c1 if side_home else 1 - c1
         clv.append(p1 - p0)
         # control: the side the market itself favoured when we logged
         fav_home = k0["home"] >= 0.5
         f0 = k0["home"] if fav_home else 1 - k0["home"]
-        f1 = c["kalshi"]["home"] if fav_home else 1 - c["kalshi"]["home"]
+        f1 = c1 if fav_home else 1 - c1
         ctrl.append(f1 - f0)
     if clv:
         avg = sum(clv) / len(clv)

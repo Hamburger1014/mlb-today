@@ -1,4 +1,4 @@
-name: Kalshi snapshot
+name: Prediction logs
 
 on:
   schedule:
@@ -21,8 +21,6 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'scripts/fetch_kalshi_wnba.py'
-      - 'scripts/fetch_kalshi_mlb.py'
       - 'scripts/wnba_log.py'
       - 'scripts/verify_wnba_parity.py'
       - 'scripts/mlb_log.py'
@@ -44,10 +42,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Fetch Kalshi markets
-        run: |
-          python scripts/fetch_kalshi_wnba.py
-          python scripts/fetch_kalshi_mlb.py
       # Gate: the logger reimplements the model that lives in the HTML. If the
       # two ever drift, the logged track record stops describing what the site
       # shows — so fail loudly rather than record predictions nobody made.
@@ -77,14 +71,13 @@ jobs:
           for attempt in 1 2 3; do
             git fetch -q origin main
             git reset -q origin/main
-            git add data/kalshi_wnba.json data/kalshi_mlb.json \
-                    data/wnba_predictions.json data/wnba_bets.json \
+            git add data/wnba_predictions.json data/wnba_bets.json \
                     data/mlb_predictions.json data/football_lines.json \
                     data/card_log.json
             if git diff --cached --quiet; then
               echo "no changes"; exit 0
             fi
-            git commit -q -m "Kalshi snapshot + prediction logs"
+            git commit -q -m "Prediction logs"
             if git push -q origin HEAD:main; then
               echo "pushed on attempt $attempt"; exit 0
             fi

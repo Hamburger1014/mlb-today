@@ -13,11 +13,18 @@ not anyone is looking.
 Constants MUST match Today's Card in index.html; scripts/verify_card_parity.py
 diffs them and the workflow fails on drift.
 
-Sources, all already produced by earlier steps of the same job:
-  Kalshi MLB   data/kalshi_mlb.json
+CROSS-BOOK IS NOW A NO-OP. It compared two independent de-vigged prices on the
+same game and bought whichever venue was cheap — the only model-free edge this
+site could detect automatically. It needed TWO price sources and Kalshi was the
+second one. Kalshi is no longer used anywhere in this project, so one source
+remains and there is nothing to compare it against. The machinery below is
+source-agnostic and deliberately left in place: it yields nothing while a single
+source exists, and revives untouched if a second feed is ever added.
+
+Sources:
   DK MLB       ESPN scoreboard (one call — it carries structured moneylines now,
                which it did not in June, so no per-game summary fan-out)
-  WNBA both    data/wnba_predictions.json (model prob + vegas + spread + kalshi)
+  WNBA         data/wnba_predictions.json (model prob + vegas + spread)
 """
 import json, math, os, sys, urllib.request
 from datetime import datetime, timedelta, timezone
@@ -103,51 +110,14 @@ def breakeven_american(p):
 
 # ── price sources ─────────────────────────────────────────────────────
 
-def kalshi_mlb():
-    path = os.path.join(ROOT, "data", "kalshi_mlb.json")
-    if not os.path.exists(path):
-        return {}, None
-    try:
-        snap = json.load(open(path))
-    except Exception:
-        return {}, None
-    age = None
-    try:
-        t = datetime.fromisoformat(snap["fetched_at"].replace("Z", "+00:00"))
-        age = (datetime.now(timezone.utc) - t).total_seconds() / 60.0
-    except Exception:
-        pass
-    by_event = {}
-    for series, markets in (snap.get("markets") or {}).items():
-        if "GAME" not in series.upper():
-            continue
-        for m in markets or []:
-            by_event.setdefault(m.get("event_ticker"), []).append(m)
+def second_source():
+    """The second price source for cross-book. There isn't one any more.
 
-    def mid(m):
-        try:
-            b, a = float(m["yes_bid_dollars"]), float(m["yes_ask_dollars"])
-            if 0 <= b <= a <= 1 and a > 0:
-                return (b + a) / 2
-        except (TypeError, ValueError, KeyError):
-            pass
-        return None
-
-    out = {}
-    for _, mkts in by_event.items():
-        sides = {}
-        for m in mkts:
-            suf = (m.get("ticker") or "").rsplit("-", 1)[-1].upper()
-            v = mid(m)
-            if v is not None:
-                sides[suf] = v
-        if len(sides) != 2:
-            continue
-        (t1, p1), (t2, p2) = sorted(sides.items())
-        tot = p1 + p2
-        if tot > 0:
-            out["|".join(sorted([t1, t2]))] = {t1: p1 / tot, t2: p2 / tot}
-    return out, age
+    This returned de-vigged Kalshi prices. Kalshi is gone and ESPN relays only
+    DraftKings, so returning empty makes every cross-book path a no-op without
+    deleting logic that is otherwise correct and source-agnostic.
+    """
+    return {}, None
 
 
 def dk_mlb():
@@ -227,10 +197,10 @@ def candidates():
         })
 
     # ── cross-book: MLB (Kalshi vs DraftKings) ──
-    kal, age = kalshi_mlb()
+    kal, age = second_source()
     fresh = age is None or age <= CARD_MAX_STALE_MIN
     if not fresh:
-        print(f"  cross-book suppressed: Kalshi snapshot {age:.0f} min old")
+        print(f"  cross-book suppressed: price snapshot {age:.0f} min old")
     if fresh and kal:
         for key, dk in dk_mlb().items():
             k = kal.get(norm_pair(dk["home"], dk["away"]))
@@ -261,7 +231,8 @@ def candidates():
         for e in entries:
             if e.get("result"):
                 continue
-            v, kg, sp = e.get("vegas"), (e.get("kalshi") or {}).get("game"), e.get("spread")
+            v, sp = e.get("vegas"), e.get("spread")
+            kg = None                      # no second source; see second_source()
             gid, home, away = e["id"], e["home"], e["away"]
             start = e.get("gameDate")
             dv = devig_power([ml_to_raw(v["homeML"]), ml_to_raw(v["awayML"])]) if v else None

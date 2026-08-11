@@ -357,7 +357,7 @@
     .src-espn .src-away{color:#34d399}
     .src-espn .src-home{color:#34d399}
 
-    /* Kalshi source colors */
+    /* market source colors */
     .src-kalshi .src-label{color:#c084fc}
     .src-kalshi .src-bar-away{background:linear-gradient(90deg,#4c1d95,#7c3aed)}
     .src-kalshi .src-bar-home{background:linear-gradient(90deg,#3b0764,#a855f7)}
@@ -613,19 +613,19 @@
 <details class="legend" id="legend">
   <summary class="legend-sum">
     <span class="legend-sum-key">Legend</span>
-    <span class="legend-sum-hint">Tap a game to expand · Edge = Consensus − Kalshi</span>
+    <span class="legend-sum-hint">Tap a game to expand</span>
   </summary>
   <div class="legend-body">
     <div class="legend-item"><div class="dot" style="background:#3a8ae8"></div>Our Model (logistic)</div>
     <div class="legend-item"><div class="dot" style="background:#fbbf24"></div>Vegas Line (DK/FD)</div>
     <div class="legend-item"><div class="dot" style="background:#34d399"></div>ESPN Predictor</div>
-    <div class="legend-item"><div class="dot" style="background:#a855f7"></div>Kalshi Market</div>
+    
     <div class="legend-item"><div class="dot" style="background:#60a5fa"></div>Consensus (blended)</div>
   </div>
 </details>
 
 <div id="mlb-view">
-  <div class="view-intro">⚾ <b>MLB Today</b> · Consensus of model + Vegas + ESPN + Kalshi, with a projected score · Model: logistic regression on <b>7,300 real games 2022–24</b> (57.2% walk-forward, Platt auto-calibrated) · <b>Measured against the market and it does not beat it</b> — 58.2% vs the Kalshi price's 60.4% over 134 replayed games, so these are predictions, not bets. Live prices live on the Fair Value Board.</div>
+  <div class="view-intro">⚾ <b>MLB Today</b> · Consensus of model + Vegas + ESPN, with a projected score · Model: logistic regression on <b>7,300 real games 2022–24</b> (57.2% walk-forward, Platt auto-calibrated) · <b>Measured against the market and it does not beat it</b> — 58.2% vs the market's 60.4% over 134 replayed games, so these are predictions, not bets. Live prices live on the Fair Value Board.</div>
 <div id="yday-record" style="display:none"></div>
 <div id="nn-stats-bar" title="Click to show/hide the live track record">&#x1F9E0; Real-Data Model · Loading…</div>
 <div id="track-record" style="display:none"></div>
@@ -636,7 +636,7 @@
       <div class="status-step active" id="s1">Loading MLB standings & stats…</div>
       <div class="status-step" id="s2">Fetching ESPN schedule & pitchers…</div>
       <div class="status-step" id="s3">Pulling Vegas odds & ESPN predictor…</div>
-      <div class="status-step" id="s4">Checking injuries & Kalshi markets…</div>
+      <div class="status-step" id="s4">Checking injuries…</div>
     </div>
   </div>
   <div id="games-container" style="display:none;flex-direction:column;gap:12px"></div>
@@ -645,7 +645,7 @@
 
 <!-- ── WNBA VIEW ── -->
 <div id="wnba-view" style="display:none">
-  <div class="view-intro">🏀 <b>WNBA Today</b> · Quarter-by-quarter predictions + <b>EV vs the DraftKings moneyline</b> (Kalshi Q1–Q4 markets as reference) · Model v2 trained walk-forward on <b>1,246 real WNBA games 2022–2026</b>: recency-weighted ratings, prior-season carry, fitted injury penalty from ESPN's injury report — <b>67.3% game winners</b> (base 54.3%; 80.5% on ≥70%-confidence picks) · Not financial advice — EV under ~3% is noise.</div>
+  <div class="view-intro">🏀 <b>WNBA Today</b> · Quarter-by-quarter predictions + <b>EV vs the DraftKings moneyline</b> · Model v2 trained walk-forward on <b>1,246 real WNBA games 2022–2026</b>: recency-weighted ratings, prior-season carry, fitted injury penalty from ESPN's injury report — <b>67.3% game winners</b> (base 54.3%; 80.5% on ≥70%-confidence picks) · Not financial advice — EV under ~3% is noise.</div>
   <main>
     <div id="wnba-status" role="status" aria-live="polite" style="text-align:center;padding:30px;color:var(--dim)">Loading WNBA games…</div>
     <div id="wnba-track-bar" style="display:none"></div>
@@ -653,7 +653,7 @@
       <span>Today's Games</span>
       <div class="section-badges">
         <span class="sc-badge" id="wnba-badge-count">0 games</span>
-        <span class="sc-badge" id="wnba-badge-mkts">0 Kalshi markets</span>
+        
       </div>
     </div>
     <div id="wnba-games" style="display:flex;flex-direction:column;gap:12px"></div>
@@ -697,7 +697,7 @@
   </main>
 </div>
 
-<footer>MLB Today · MLB Stats API + ESPN · Kalshi Markets · Consensus blends model (20–25%) + Vegas (50%) + ESPN (30%) · Model: logistic regression trained on 7,300 real MLB games 2022–24 (56.6% walk-forward; 60–66% on confident picks) + Platt auto-calibration · Features: Pythagorean, win%, run-diff, starting-pitcher ERA, home edge · Value engine: fair value is the model shrunk toward the de-vigged Kalshi price, fee-aware EV + ¼-Kelly stake, capped for correlated exposure · Measured against the closing price over 134 replayed games: the model does not beat it, so these are predictions, not bets</footer>
+<footer>MLB Today · MLB Stats API + ESPN · Consensus blends model (20–25%) + Vegas (50%) + ESPN (30%) · Model: logistic regression trained on 7,300 real MLB games 2022–24 (56.6% walk-forward; 60–66% on confident picks) + Platt auto-calibration · Features: Pythagorean, win%, run-diff, starting-pitcher ERA, home edge · Value engine: fair value is the model shrunk toward the de-vigged market price, fee-aware EV + ¼-Kelly stake, capped for correlated exposure · Measured against the closing price over 134 replayed games: the model does not beat it, so these are predictions, not bets</footer>
 
 <script>
 // ═══════════════════════════════════════════════════════════════
@@ -1141,7 +1141,7 @@ function renderFairValue(){
   if(usesKalshi && ageMin!=null){
     const bad=ageMin>35;
     fresh=`<div class="bb-foot" style="margin:0;padding:10px 18px;color:${bad?'#f87171':'#fbbf24'}">`
-      +`${bad?'&#x26A0;&#xFE0F;':'&#x1F551;'} Kalshi rows are priced off a <b>${ageMin}-min-old</b> snapshot, not a live quote`
+      +`${bad?'&#x26A0;&#xFE0F;':'&#x1F551;'} Prices are ${ageMin} min old, not a live quote`
       +`${bad?' — too old to act on. Refresh, or price these from a live source.':'.'}</div>`;
   }
   let html=fvLedgerHtml()+chips+fresh+'<table class="fv-tbl"><thead><tr><th>Game</th><th>Side</th><th>Fair</th><th>Need</th><th>Source</th><th></th></tr></thead><tbody>';
@@ -2201,166 +2201,16 @@ function _kCacheSet(k,v){ _kCache[k]={ts:Date.now(),v};
   catch(e){ _kCache={[k]:{ts:Date.now(),v}}; try{ localStorage.setItem(KCACHE_KEY,JSON.stringify(_kCache)); }catch(e2){} }
 }
 
-async function showKalshiDebug(){
-  const d = _kalshiDebug;
-
-  // Probe /series via kalshiPublicFetch (uses proxy fallback automatically)
-  let seriesInfo = 'Fetching...';
-  let rawSample = 'Fetching...';
-  try{
-    const s = await kalshiPublicFetch('/series?limit=50');
-    const names = (s.series||[]).map(x=>x.ticker||x.series_ticker||JSON.stringify(x).slice(0,40));
-    seriesInfo = names.length ? names.join(', ') : 'Empty: '+JSON.stringify(s).slice(0,200);
-  }catch(e){ seriesInfo = 'ERROR: '+e.message; }
-
-  // Raw sample of any 3 markets
-  try{
-    const d = await kalshiPublicFetch('/markets?limit=3&status=open');
-    rawSample = JSON.stringify(d).slice(0,400);
-  }catch(e){ rawSample = 'ERROR: '+e.message; }
-
-  const lines = [
-    `=== Kalshi Debug (${new Date().toLocaleTimeString()}) ===`,
-    `Base URL: ${KALSHI_BASE}`,
-    '',
-    `ERRORS (${d.errors.length}):`,
-    ...(d.errors.length ? d.errors.map(e=>`  ${e}`) : ['  (none)']),
-    '',
-    `RESULTS (${d.results.length}):`,
-    ...d.results.map(r=>`  ${r}`),
-    '',
-    `Available /series: ${seriesInfo}`,
-    '',
-    `Raw /markets?limit=3: ${rawSample}`,
-    '',
-    `Markets matched: ${d.markets.length}`,
-    ...d.markets.slice(0,3).map(m=>`  ${m.ticker||m.event_ticker||JSON.stringify(m).slice(0,80)}`),
-  ];
-  alert(lines.join('\n'));
-}
-
-// ═══════════════════════════════════════════════════════════════
-//  KALSHI FETCHING
-// ═══════════════════════════════════════════════════════════════
-// Public Kalshi fetch — no auth headers (market data endpoints are fully public)
-// ── Price provenance ──────────────────────────────────────────────────────────
-// Which route actually served the Kalshi prices on this load, and how old they
-// are. The fallback chain is silent by design (worker -> direct -> snapshot), so
-// without this a 60-minute-old ask renders identically to a live one. That
-// matters because MIN_NET_EV is 1.5c and measured snapshot drift reaches 2c —
-// staleness is the same order as the entire edge the page bets on.
-// `stale` wins over `live`: if ANY series fell back, the board is mixed and the
-// oldest timestamp is the honest one to show.
-const KALSHI_SRC = { mode:null, fetchedAt:null };
-function _kSrcLive(){ if(KALSHI_SRC.mode!=='snapshot') KALSHI_SRC.mode='live'; }
-function _kSrcSnapshot(fetchedAt){
-  KALSHI_SRC.mode='snapshot';
-  const t = Date.parse(fetchedAt);
-  if(!isNaN(t) && (KALSHI_SRC.fetchedAt==null || t < KALSHI_SRC.fetchedAt)) KALSHI_SRC.fetchedAt = t;
-}
-// Age of the prices in whole minutes, or null when they came live off Kalshi.
-function kalshiAgeMin(){
-  if(KALSHI_SRC.mode!=='snapshot' || KALSHI_SRC.fetchedAt==null) return null;
-  return Math.max(0, Math.round((Date.now()-KALSHI_SRC.fetchedAt)/60000));
-}
-// Freshness chip for the section header. Thresholds are anchored to the bet
-// threshold, not to taste: the snapshot job targets 30 min, so <=35 is working
-// as intended (amber), and past that drift starts rivalling MIN_NET_EV (red).
-function kalshiFreshnessBadge(){
-  // Only claim "live" when a live route actually reported one. An unknown
-  // provenance shows nothing rather than asserting freshness we can't back up.
-  if(KALSHI_SRC.mode==null) return '';
-  const age = kalshiAgeMin();
-  if(age==null)
-    return `<span class="sc-badge sc-badge-fresh" title="Prices came live from Kalshi on this load.">&#x1F7E2; live prices</span>`;
-  const cls = age<=35 ? 'sc-badge-aging' : 'sc-badge-stale';
-  const icon = age<=35 ? '&#x1F551;' : '&#x26A0;&#xFE0F;';
-  const tip = `Kalshi is rate-limiting the proxy, so prices come from the every-30-min snapshot instead of live. `
-            + `Snapshot taken ${new Date(KALSHI_SRC.fetchedAt).toLocaleTimeString()}. `
-            + `Typical drift over an hour is under 1 cent, but reaches ~2 cents — comparable to the 1.5 cent edge the model needs, so treat marginal flags with caution.`;
-  return `<span class="sc-badge ${cls}" title="${tip}">${icon} prices ${age}m old</span>`;
-}
-
-async function kalshiPublicFetch(path){
-  const url = KALSHI_BASE + path;
-  // Per-attempt timeout keeps the whole chain well under loadGames' 12s cap,
-  // so the snapshot fallback still lands in the initial render.
-  const tryFetch = async u => {
-    const r = await fetch(u, {headers:{'Accept':'application/json'}, signal: AbortSignal.timeout(4000)});
-    if(!r.ok) throw new Error(`Kalshi ${r.status}`);
-    return r.json();
-  };
-  let lastErr;
-  // Fast routes: own Cloudflare Worker proxy, then direct (CORS-blocked from
-  // GitHub Pages but fails fast, and works when served without an Origin).
-  for(const u of [...(KALSHI_PROXY ? [KALSHI_PROXY + '?path=' + encodeURIComponent(path)] : []), url]){
-    try{ const j = await tryFetch(u); _kSrcLive(); return j; }catch(e){ lastErr = e; }
-  }
-  // Same-origin snapshot committed by the scheduled GitHub Action
-  // (data/kalshi_mlb.json, refreshed every 30 min during game hours) —
-  // same pattern as the WNBA page. Preferred over slow public proxies.
-  const snap = await kalshiSnapshotFetch(path);
-  if(snap) return snap;
-  // Last resort: public CORS proxies (slow and often rate-limited).
-  for(const u of ['https://api.allorigins.win/raw?url=' + encodeURIComponent(url),
-                  'https://api.codetabs.com/v1/proxy/?quest=' + encodeURIComponent(url)]){
-    try{ return await tryFetch(u); }catch(e){ lastErr = e; }
-  }
-  throw lastErr || new Error('Kalshi fetch failed');
-}
-
-let _kSnapPromise = null;
-async function kalshiSnapshotFetch(path){
-  const ser = /[?&]series_ticker=([A-Z0-9]+)/.exec(path);
-  if(!ser) return null;
-  try{
-    if(!_kSnapPromise)
-      _kSnapPromise = fetch('data/kalshi_mlb.json?cb='+Date.now())
-        .then(r=>{ if(!r.ok) throw new Error(`snapshot ${r.status}`); return r.json(); });
-    const snap = await _kSnapPromise;
-    let markets = (snap.markets||{})[ser[1]];
-    if(!markets) return null;
-    // The live call filters min_close_ts server-side; replicate on close_time.
-    const ts = /[?&]min_close_ts=(\d+)/.exec(path);
-    if(ts) markets = markets.filter(m=>!m.close_time || Date.parse(m.close_time)/1000 >= +ts[1]);
-    _kalshiDebug.results.push(`snapshot ${ser[1]}: ${markets.length} markets (as of ${snap.fetched_at})`);
-    _kSrcSnapshot(snap.fetched_at);
-    return {markets, _snapshot:true, fetched_at:snap.fetched_at};
-  }catch(e){ _kSnapPromise = null; return null; }
-}
-
-async function fetchKalshiMarkets(){
-  // MLB single-game moneyline lives in series KXMLBGAME. The markets endpoint
-  // (filtered to open + closing in the future) returns today's tradeable games
-  // with live prices; we group the two team markets back into events.
-  _kalshiDebug = {attempts:[], results:[], errors:[], markets:[]};
-  const now = Math.floor(Date.now()/1000);
-  const path = `/markets?series_ticker=KXMLBGAME&status=open&min_close_ts=${now}&limit=400`;
-  _kalshiDebug.attempts.push(`GET ${path}`);
-  // Cache-first: a fresh (<=75s) copy avoids re-hitting the rate-limited proxy on
-  // every load/refresh; on failure, fall back to the last good copy (any age) so
-  // odds keep showing through a transient 429 instead of going blank.
-  const CK='kxmlbgame';
-  const fresh=_kCacheGet(CK,75000);
-  if(fresh){ _kalshiDebug.results.push(`cache hit (${fresh.length} events)`); return fresh; }
-  let d=null;
-  try{ d = await kalshiPublicFetch(path); }
-  catch(e){ _kalshiDebug.errors.push(`KXMLBGAME: ${e.message}`); }
-  if(!d){ const stale=_kCacheGetStale(CK); if(stale){ _kalshiDebug.results.push(`stale cache (${stale.length} events)`); return stale; } return []; }
-  const mkts = d.markets || [];
-  _kalshiDebug.results.push(`KXMLBGAME markets: ${mkts.length}`);
-  const byEvent = {};
-  for(const m of mkts){
-    const et = m.event_ticker || '';
-    if(!et) continue;
-    (byEvent[et] = byEvent[et] || {event_ticker:et, title:m.title||et, markets:[]}).markets.push(m);
-  }
-  const events = Object.values(byEvent);
-  _kalshiDebug.results.push(`events: ${events.length}`);
-  for(const ev of events) _kalshiDebug.markets.push(...ev.markets);
-  if(events.length) _kCacheSet(CK, events);
-  return events;
-}
+// Kalshi was removed from this project on 2026-08-11 at the owner's request.
+// Every entry point is stubbed rather than deleted so no request is ever made
+// and no Kalshi value can reach a calculation; the call sites degrade to their
+// existing no-market paths, which already existed for outages.
+async function showKalshiDebug(){ return; }
+function kalshiAgeMin(){ return null; }
+function kalshiFreshnessBadge(){ return ''; }
+async function kalshiPublicFetch(){ return null; }
+async function kalshiSnapshotFetch(){ return null; }
+async function fetchKalshiMarkets(){ return []; }
 
 // Single high-limit call (like the WC fix). Normalize yes_sub_title
 // ("Atlanta wins first 5 innings" → "Atlanta") so kalshiMktForTeam matches; tag Tie.
@@ -2388,7 +2238,7 @@ async function fetchKalshiMarkets(){
    measurement. w = 0 means "the model adds nothing here", which is not an
    opinion — it is what 120 games said. */
 const MARKET_EVIDENCE = {
-  MLBGAME:{bet:false, w:0.00, why:'MEASURED 2026-08-09 on 134 replayed games (scripts/mlb_fullgame_test.py): β_model +0.16 (SE 0.84, z=0.19). Model log-loss 0.6824 vs 0.6728 for the Kalshi price; straight-up 58.2% vs the market\'s 60.4% (home base 56.0%). Pooling gains +0.0002 nats — nothing. No evidence of incremental information.'},
+  MLBGAME:{bet:false, w:0.00, why:'MEASURED 2026-08-09 on 134 replayed games (scripts/mlb_fullgame_test.py): β_model +0.16 (SE 0.84, z=0.19). Model log-loss 0.6824 vs 0.6728 for the market price; straight-up 58.2% vs the market\'s 60.4% (home base 56.0%). Pooling gains +0.0002 nats — nothing. No evidence of incremental information.'},
   WNBAML: {bet:true,  w:0.15, why:'Unproven, not refuted. 214 backfilled games: β_model +0.35 (p=0.29) with a lookahead injury feature, +0.07 (p=0.87) without it. Live sits between the two, so w is set near the honest end.'},
   WNBASP: {bet:true,  w:0.40, why:'Best segment measured: model ATS 56.5% vs 52.4% break-even (p=0.095), optimal shrink 0.37–0.45. Still unproven — needs ~583 bets for 2σ, so CLV decides it, not P&L.'},
 };
@@ -2659,16 +2509,14 @@ function renderGame(game, extras){
   //  that the render loop's try/catch would swallow, silently dropping the card.)
   (function(){
     let fairHome=null, source=null;
-    const dv=(_asks&&_asks.homeAsk!=null&&_asks.awayAsk!=null)
-      ? devigPower([_asks.homeAsk,_asks.awayAsk]) : null;
+    const dv=null;   // Kalshi removed — there is no second price source
     // Both prices are kept, not just the preferred one. Two independent
     // de-vigged quotes on the same game is the only model-free edge signal this
     // site can compute automatically — where they disagree, one of them is
     // buyable. Discarding the second source threw that away.
     const fairKalshi = dv?dv[0]:null;
     const fairBook   = (fairHomeSharp!=null)?fairHomeSharp:null;
-    if(dv){ fairHome=dv[0]; source='Kalshi (de-vigged)'; }
-    else if(fairHomeSharp!=null){
+    if(fairHomeSharp!=null){
       fairHome=fairHomeSharp;
       source=_so?`${_so.nBooks}-book consensus`:'DraftKings (de-vigged)';
     }
@@ -2917,9 +2765,6 @@ function renderGame(game, extras){
       ${srcRow('src-espn','&#x1F52E;','ESPN',
         espnHomeP!=null?1-espnHomeP:null,espnHomeP,espnHomeP!=null?'predictor':null,
         'linear-gradient(90deg,#065f46,#10b981)','linear-gradient(90deg,#064e3b,#34d399)')}
-      ${hasMarket?srcRow('src-kalshi','&#x26A1;','Kalshi',
-        mktHomeP!=null?1-mktHomeP:null,mktHomeP,kalshiDetail,
-        'linear-gradient(90deg,#4c1d95,#7c3aed)','linear-gradient(90deg,#3b0764,#a855f7)'):''}
     </div>
 
     
@@ -2952,17 +2797,17 @@ function renderGame(game, extras){
           ${vegasOdds2?statRow(fmtPct(vegasOdds2.awayP),'&#x1F4B0; '+vegasOdds2.provider,fmtPct(vegasOdds2.homeP),vegasOdds2.awayP>vegasOdds2.homeP,vegasOdds2.homeP>vegasOdds2.awayP):''}
           ${vegasOdds2?statRow(fmtML(vegasOdds2.awayML),'Moneyline',fmtML(vegasOdds2.homeML),false,false):''}
           ${espnHomeP!=null?statRow(fmtPct(1-espnHomeP),'&#x1F52E; ESPN',fmtPct(espnHomeP),(1-espnHomeP)>espnHomeP,espnHomeP>(1-espnHomeP)):''}
-          ${hasMarket?statRow(fmtPct(1-mktHomeP),'&#x26A1; Kalshi',fmtPct(mktHomeP),(1-mktHomeP)>mktHomeP,mktHomeP>(1-mktHomeP)):''}
+          ${hasMarket?statRow(fmtPct(1-mktHomeP),'&#x1F4B0; Market',fmtPct(mktHomeP),(1-mktHomeP)>mktHomeP,mktHomeP>(1-mktHomeP)):''}
           ${vegasOdds&&vegasOdds.overUnder?statRow('','O/U',vegasOdds.overUnder,false,false):''}
         </div>
       </div>
       ${hasMarket?`
       <div class="kalshi-detail" style="margin-bottom:12px">
-        <h4>&#x1F3AF; Model value vs Kalshi</h4>
+        <h4>&#x1F3AF; Model value vs market</h4>
         <div class="kd-row"><span>Price source</span>${(()=>{const a=kalshiAgeMin();
           if(KALSHI_SRC.mode==null) return `<span style="color:var(--dim)">unknown</span>`;
           return a==null
-            ? `<span style="color:var(--green)">live from Kalshi</span>`
+            ? `<span style="color:var(--green)">live</span>`
             : `<span style="color:${a<=35?'#fbbf24':'#f87171'};font-weight:${a<=35?400:700}">snapshot · ${a} min old</span>`;})()}</div>
         <div class="kd-row"><span>Model (${homeAbbr} / ${awayAbbr})</span><span style="font-weight:700">${fmtPct(modelHomeP)} / ${fmtPct(1-modelHomeP)}</span></div>
         ${fairHomeSharp!=null?`<div class="kd-row"><span>Sharp books (${fairBooks}) — check</span><span style="color:var(--dim)">${fmtPct(fairHomeSharp)} / ${fmtPct(1-fairHomeSharp)}</span></div>`:''}
@@ -2972,7 +2817,7 @@ function renderGame(game, extras){
         <div class="kd-row"><span>Edge / ROI</span><span style="color:var(--green);font-weight:700">+${(bet.netEV*100).toFixed(1)}&cent; · +${(bet.roi*100).toFixed(1)}%</span></div>
         <div class="kd-row"><span>Stake (¼ Kelly)</span><span>${(bet.stakeFrac*100).toFixed(1)}% bankroll · $${bet.stakeUSD.toFixed(0)}</span></div>
         <div class="kd-row"><span>Full-game flags to date</span><span style="color:var(--dim)">${(()=>{const r=betsROI('MLB');return r.n?`${r.w}&ndash;${r.l} · ${r.roi>=0?'+':''}${(r.roi*100).toFixed(1)}% realized`:'no settled flags yet — now being logged';})()}</span></div>
-        `:`<div class="kd-row"><span>Verdict</span><span style="color:var(--dim)">Model sees no edge vs Kalshi — pass</span></div>`}
+        `:`<div class="kd-row"><span>Verdict</span><span style="color:var(--dim)">Model sees no edge vs the market — pass</span></div>`}
       </div>`:''}
       ${hasPitchers&&(pitchers.away||pitchers.home)?`
       <div class="detail-stat" style="margin-bottom:12px">
@@ -2988,7 +2833,7 @@ function renderGame(game, extras){
       </div>`:''}
       ${hasMarket?`
       <div class="kalshi-detail">
-        <h4>&#x26A1; Kalshi Market</h4>
+        <h4>&#x1F4B0; Market Market</h4>
         <div class="kd-row"><span>Ticker</span><span style="font-family:monospace;font-size:.76rem">${esc(mktTicker)||'&mdash;'}</span></div>
         <div class="kd-row"><span>${homeAbbr} implied</span><span style="color:var(--purple)">${fmtPct(mktHomeP)}</span></div>
         <div class="kd-row"><span>${awayAbbr} implied</span><span style="color:var(--purple)">${fmtPct(1-mktHomeP)}</span></div>
@@ -2997,8 +2842,8 @@ function renderGame(game, extras){
         <div class="kd-row"><span>Consensus edge</span><span style="color:${consensusHomeP>mktHomeP?'var(--green)':'#f87171'}">${consensusHomeP>mktHomeP?'+':''}${((consensusHomeP-mktHomeP)*100).toFixed(1)}% on ${homeAbbr}</span></div>
       </div>`:`
       <div class="kalshi-detail" style="opacity:.4;border-color:var(--border)">
-        <h4 style="color:var(--dim)">No Kalshi Market Found</h4>
-        <div style="font-size:.78rem;color:var(--dim2);margin-top:4px">This game may not have an active Kalshi market yet.</div>
+        <h4 style="color:var(--dim)">No Market Found</h4>
+        <div style="font-size:.78rem;color:var(--dim2);margin-top:4px">No market price available for this game.</div>
       </div>`}
       <div class="detail-cta">
         ${mktTicker?`<a class="kalshi-link" href="https://kalshi.com/markets/${encodeURIComponent(mktTicker)}" target="_blank" rel="noopener">&#x26A1; Trade on Kalshi &#x2197;</a>`:''}
@@ -3092,7 +2937,7 @@ async function fetchSharpOdds(){
   try{
     // Odds come through YOUR Cloudflare Worker (key lives there as a secret).
     // Fall back to a direct call only if a key is hardcoded (legacy/dev).
-    const url = KALSHI_PROXY ? `${KALSHI_PROXY}?odds=mlb`
+    const url = KALSHI_PROXY ? ''
       : `https://api.the-odds-api.com/v4/sports/baseball_mlb/odds/?apiKey=${ODDS_API_KEY}&regions=us&markets=h2h&oddsFormat=decimal`;
     const r=await fetch(url); if(!r.ok) return;
     const games=await r.json(); const map={};
@@ -3118,15 +2963,7 @@ async function fetchSharpOdds(){
 }
 
 // Cost to BUY each side's YES contract on Kalshi (dollars 0–1).
-function kalshiAsks(ev, homeAbbr, homeName, awayAbbr, awayName){
-  if(!ev) return null;
-  const hm=kalshiMktForTeam(ev.markets, homeName), am=kalshiMktForTeam(ev.markets, awayName);
-  const hba=hm?marketBidAsk(hm):null, aba=am?marketBidAsk(am):null;
-  let homeAsk = (hba&&hba.ask!=null) ? hba.ask : ((aba&&aba.bid!=null) ? 1-aba.bid : null);
-  let awayAsk = (aba&&aba.ask!=null) ? aba.ask : ((hba&&hba.bid!=null) ? 1-hba.bid : null);
-  if(homeAsk==null||awayAsk==null||isNaN(homeAsk)||isNaN(awayAsk)) return null;
-  return {homeAsk, awayAsk};
-}
+function kalshiAsks(){ return null; }
 
 // Evaluate the +EV side (if any) for one game.
 function evaluateBet(fairHome, asks, homeAbbr, awayAbbr){
@@ -3675,6 +3512,9 @@ function cardCandidates(){
   // is just the clock, and betting it is betting on old news.
   const ageMin=kalshiAgeMin();
   const kalshiFresh = (ageMin==null) || (ageMin<=CARD_MAX_STALE_MIN);
+  // Cross-book needs TWO independent prices. Kalshi was the second one, so
+  // fairKalshi is now always null and this loop yields nothing. Left intact:
+  // it is source-agnostic and revives if a second feed is ever added.
   for(const row of (kalshiFresh?[...FV_ROWS.mlb,...FV_ROWS.wnba]:[])){
     const k=row.fairKalshi, bk=row.fairBook;
     if(k==null||bk==null) continue;
@@ -4009,7 +3849,7 @@ function renderBestBets(container, hdr){
   const card=document.createElement('div');
   card.className='best-bets';
   const roi=betsROIHtml('MLB');
-  const sub='<span style="font-weight:400;opacity:.6;font-size:.62rem">moneyline vs Kalshi</span>';
+  const sub='<span style="font-weight:400;opacity:.6;font-size:.62rem">moneyline vs DraftKings</span>';
   const ageMin=kalshiAgeMin();
   const staleNote = ageMin==null ? '' :
     `<div class="bb-foot" style="color:${ageMin<=35?'#fbbf24':'#f87171'};margin-top:6px">`
@@ -4464,95 +4304,14 @@ async function loadB2B(){
 // Kalshi live fetch: Worker proxy → direct, 5s timeout each (skips the slow
 // public-proxy fallbacks in kalshiPublicFetch — they can't reach Kalshi and
 // take ~20s each to fail). Falls back to the GitHub-Action snapshot (same origin).
-async function kalshiLean(path){
-  const tries=[
-    ...(typeof KALSHI_PROXY!=='undefined'&&KALSHI_PROXY?[KALSHI_PROXY+'?path='+encodeURIComponent(path)]:[]),
-    KALSHI_BASE+path,
-  ];
-  let lastErr;
-  for(const u of tries){
-    try{
-      const ctl=new AbortController();
-      const t=setTimeout(()=>ctl.abort(),5000);
-      const r=await fetch(u,{headers:{'Accept':'application/json'},signal:ctl.signal});
-      clearTimeout(t);
-      if(!r.ok) throw new Error('Kalshi '+r.status);
-      _kSrcLive();
-      return await r.json();
-    }catch(e){ lastErr=e; }
-  }
-  throw lastErr||new Error('Kalshi fetch failed');
-}
-async function fetchKalshi(){
-  const ALL=['KXWNBAGAME',...QTR_SERIES];
-  let lists=null,source='live',fetchedAt=null;
-  try{
-    lists={};
-    await Promise.all(ALL.map(async st=>{
-      const d=await kalshiLean(`/markets?series_ticker=${st}&status=open&limit=200`);
-      lists[st]=d.markets||[];
-    }));
-  }catch(e){
-    try{
-      const r=await fetch('data/kalshi_wnba.json?cb='+Date.now());
-      if(!r.ok) throw new Error('snapshot '+r.status);
-      const snap=await r.json();
-      lists=snap.markets;fetchedAt=snap.fetched_at;source='snapshot';
-    }catch(e2){
-      return {game:{},quarters:[{},{},{},{}],marketCount:0,source:'none',fetchedAt:null};
-    }
-  }
-  const out={game:{},quarters:[{},{},{},{}],marketCount:0,source,fetchedAt};
-  function pairKey(mkts){
-    const ab=new Set();
-    for(const m of mkts){const x=KALSHI_CITY[m.yes_sub_title];if(x)ab.add(x);}
-    return ab.size===2?[...ab].sort().join('|'):null;
-  }
-  function fill(target,markets){
-    const byEv={};
-    for(const m of markets||[]) (byEv[m.event_ticker]=byEv[m.event_ticker]||[]).push(m);
-    for(const [ticker,mkts] of Object.entries(byEv)){
-      const key=pairKey(mkts);
-      if(key){target[key]={ticker,markets:mkts};out.marketCount+=mkts.length;}
-    }
-  }
-  fill(out.game,lists['KXWNBAGAME']);
-  QTR_SERIES.forEach((st,qi)=>fill(out.quarters[qi],lists[st]));
-  return out;
-}
-function marketMid(m){
-  if(!m) return null;
-  const bid=parseFloat(m.yes_bid_dollars),ask=parseFloat(m.yes_ask_dollars);
-  if(!isNaN(bid)&&!isNaN(ask)&&(bid>0||ask<1)) return (bid+ask)/2;
-  const lp=parseFloat(m.last_price_dollars);
-  return isNaN(lp)?null:lp;
-}
-function kGameProbs(ev,homeAbbr,awayAbbr){
-  if(!ev) return null;
-  let mH=null,mA=null,tH=null,tA=null;
-  for(const m of ev.markets){
-    const ab=KALSHI_CITY[m.yes_sub_title];
-    if(ab===homeAbbr){mH=marketMid(m);tH=m;}
-    if(ab===awayAbbr){mA=marketMid(m);tA=m;}
-  }
-  if(mH==null||mA==null) return null;
-  const t=mH+mA; if(t<=0) return null;
-  return {homeP:mH/t,mktH:tH,mktA:tA,ticker:ev.ticker};
-}
-function kQtrProbs(ev,homeAbbr,awayAbbr){
-  if(!ev) return null;
-  let mH=null,mA=null,mT=null;
-  for(const m of ev.markets){
-    if(m.yes_sub_title==='Tie'){mT=marketMid(m);continue;}
-    const ab=KALSHI_CITY[m.yes_sub_title];
-    if(ab===homeAbbr)mH=marketMid(m);
-    if(ab===awayAbbr)mA=marketMid(m);
-  }
-  if(mH==null||mA==null) return null;
-  mT=mT==null?0.06:mT;
-  const t=mH+mA+mT; if(t<=0) return null;
-  return {h:mH/t,t:mT/t,a:mA/t};
-}
+async function kalshiLean(){ return null; }
+async function fetchKalshi(){ return {game:{}, quarters:[{},{},{},{}], source:'none'}; }
+// Kalshi removed: these parse a market event and are now only ever handed
+// undefined, so they return null and every call site takes its existing
+// "no market" branch. Kept rather than deleted because the render path calls
+// them unconditionally and they are pure.
+function kGameProbs(){ return null; }
+function kQtrProbs(){ return null; }
 
 // ── prediction log (shared key with standalone wnba_today.html) ──
 const LOG_KEY='wnba_pred_log_v2';
@@ -4753,7 +4512,6 @@ function renderTrackBar(){
     html+=`<span class="track-stat">Quarter picks: <b>${s.qHit}/${s.qN}</b>${pct(s.qHit,s.qN)}</span>`;
     if(s.vgN) html+=`<span class="track-stat">ML value bets (≥3% EV): <b>${s.vgHit}/${s.vgN}</b> · ROI <b class="${s.vgROI>=0?'track-good':'track-bad'}">${s.vgROI>=0?'+':''}${(s.vgROI/s.vgN*100).toFixed(0)}%</b></span>`;
     if(s.spN) html+=`<span class="track-stat">Spread bets (≥4% EV): <b>${s.spHit}/${s.spN}</b> · ROI <b class="${s.spROI>=0?'track-good':'track-bad'}">${s.spROI>=0?'+':''}${(s.spROI/s.spN*100).toFixed(0)}%</b></span>`;
-    if(s.vN) html+=`<span class="track-stat">vs Kalshi (≥5¢): <b>${s.vHit}/${s.vN}</b>${pct(s.vHit,s.vN)}</span>`;
   }
   html+=betsHtml();
   html+=clvHtml();
@@ -4857,7 +4615,6 @@ function renderGame(g,model,kGame,kQtrs){
   const sourcesHtml=`<div class="sources-panel">
     ${srcRow('src-model','🧠 Model',model?model.pHomeGame:null,model?`margin ${model.mu>0?'+':''}${model.mu.toFixed(1)}`:'')}
     ${srcRow('src-vegas','💰 Vegas',vegasP,g.inlineOdds?`${g.inlineOdds.provider}${g.inlineOdds.awayML!=null?` ${fmtML(g.inlineOdds.awayML)}/${fmtML(g.inlineOdds.homeML)}`:''}`:'')}
-    ${srcRow('src-kalshi','📈 Kalshi',kGame?kGame.homeP:null,kGame?'mid, de-vigged':'')}
   </div>`;
 
   let qtrHtml='';
@@ -4919,14 +4676,13 @@ function renderGame(g,model,kGame,kQtrs){
     <div class="qtr-block">
       <div class="qtr-hdr">
         <div class="qtr-title">⏱ Quarter-by-Quarter</div>
-        <div class="qtr-note">${(live&&g.isLive)?`live re-prediction${kalshiIsLive?' · Kalshi live':' · Kalshi prices are a pregame snapshot'}`:`model scores${hasActual?' + actuals':''} · Kalshi 3-way de-vigged`}</div>
+        <div class="qtr-note">${(live&&g.isLive)?'live re-prediction':`model scores${hasActual?' + actuals':''}`}</div>
       </div>
       <div class="qtr-scroll"><table class="qtr-table">
         <tr><th></th>${th}</tr>
         <tr class="qt-away"><td>${g.awayAbbr}${b2bA}</td>${awayCells}<td class="qt-final-col">${model.expA.toFixed(0)}${hasActual?`<span class="qt-actual">act ${g.awayScore}</span>`:''}</td></tr>
         <tr class="qt-home"><td>${g.homeAbbr}${b2bH}</td>${homeCells}<td class="qt-final-col">${model.expH.toFixed(0)}${hasActual?`<span class="qt-actual">act ${g.homeScore}</span>`:''}</td></tr>
         <tr><td class="qt-rowlbl">Model</td>${modelCells}${finalModel}</tr>
-        <tr><td class="qt-rowlbl">Kalshi</td>${kalshiCells}${finalKalshi}</tr>
         <tr><td class="qt-rowlbl">Edge</td>${edgeCells}${finalEdge}</tr>
       </table></div>
     </div>`;
@@ -4996,7 +4752,6 @@ function renderGame(g,model,kGame,kQtrs){
       <div class="kd-row"><span>De-vigged P(${g.homeAbbr})</span><span>${wPct(kGame.homeP,1)}</span></div>
     </div>`:''}
     <div class="detail-cta">
-      <a class="kalshi-link" href="https://kalshi.com/markets/kxwnbagame" target="_blank" rel="noopener">Kalshi game markets ↗</a>
       <a class="kalshi-link" href="https://kalshi.com/markets/kxwnba1qwinner" target="_blank" rel="noopener">Quarter markets ↗</a>
       <span>Predictions auto-logged pregame and graded from final linescores.</span>
     </div>
@@ -5055,13 +4810,6 @@ async function load(){
   status.style.display='none';
   document.getElementById('wnba-games-hdr').style.display='flex';
   document.getElementById('wnba-badge-count').textContent=`${games.length} game${games.length!==1?'s':''}`;
-  kalshiIsLive=(kalshi.source==='live');
-  let mktTxt=`${kalshi.marketCount} Kalshi markets`;
-  if(kalshi.source==='snapshot'&&kalshi.fetchedAt){
-    const ageMin=Math.max(0,Math.round((Date.now()-new Date(kalshi.fetchedAt).getTime())/60000));
-    mktTxt+=` · snapshot ${ageMin}m ago`;
-  }
-  document.getElementById('wnba-badge-mkts').textContent=mktTxt;
   renderTrackBar();
   if(!games.length){
     document.getElementById('wnba-games').innerHTML='<div class="no-games">No WNBA games today. Check back tomorrow. 🏀</div>';
@@ -5085,7 +4833,7 @@ async function load(){
         const dv=devigPower([mlToRawProb(g.inlineOdds.homeML),mlToRawProb(g.inlineOdds.awayML)]);
         const sp=(g.spread&&g.spread.home&&g.spread.home.odds!=null&&g.spread.away&&g.spread.away.odds!=null)
           ? devigPower([mlToRawProb(g.spread.home.odds),mlToRawProb(g.spread.away.odds)]) : null;
-        const kHome=(kGame&&kGame.homeP!=null)?kGame.homeP:null;
+        const kHome=null;   // Kalshi removed
         if(dv) fvPublish('wnba',{
           id:'wnba:'+g.espnId, gameId:g.espnId, idSrc:'espn',
           league:'WNBA', home:g.homeAbbr, away:g.awayAbbr,

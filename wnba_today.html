@@ -293,7 +293,6 @@
   <div class="hdr-right">
     <a class="refresh-btn" href="index.html" style="text-decoration:none">⚾ MLB</a>
     <div class="hdr-badge badge-espn">📊 ESPN Data</div>
-    <div class="hdr-badge badge-kalshi">📈 Kalshi Q1–Q4 Markets</div>
     <button class="refresh-btn" onclick="init()">↻ Refresh</button>
   </div>
 </header>
@@ -323,7 +322,7 @@
     <span>Today's Games</span>
     <div class="section-badges">
       <span class="sc-badge" id="badge-count">0 games</span>
-      <span class="sc-badge" id="badge-mkts">0 Kalshi markets</span>
+      
     </div>
   </div>
 
@@ -715,68 +714,15 @@ async function loadB2B(){
 // ═══════════════════════════════════════════════════════════════
 //  KALSHI FETCHING (public market data — no auth)
 // ═══════════════════════════════════════════════════════════════
-async function kalshiFetch(path){
-  const r=await fetch(KALSHI_BASE+path,{headers:{'Accept':'application/json'}});
-  if(!r.ok) throw new Error(`Kalshi ${r.status}`);
-  return r.json();
-}
+// Kalshi removed 2026-08-11 at the owner's request. Stubbed rather than
+// deleted so no request is ever issued and every caller takes its existing
+// no-market path.
+async function kalshiFetch(){ throw new Error('Kalshi disabled'); }
 
 // Returns {game:{pairKey→event}, quarters:[{pairKey→event}×4], marketCount, source, fetchedAt}
 // Live Kalshi is CORS-blocked from GitHub Pages, so a scheduled GitHub Action
 // snapshots the same market data to data/kalshi_wnba.json (same-origin fallback).
-async function fetchKalshi(){
-  const ALL_SERIES=['KXWNBAGAME',...QTR_SERIES];
-  let lists=null, source='live', fetchedAt=null;
-  try{
-    lists={};
-    await Promise.all(ALL_SERIES.map(async st=>{
-      const d=await kalshiFetch(`/markets?series_ticker=${st}&status=open&limit=200`);
-      lists[st]=d.markets||[];
-    }));
-  }catch(e){
-    console.warn('Live Kalshi blocked ('+e.message+') — trying snapshot');
-    try{
-      const r=await fetch('data/kalshi_wnba.json?cb='+Date.now());
-      if(!r.ok) throw new Error(`snapshot ${r.status}`);
-      const snap=await r.json();
-      lists=snap.markets; fetchedAt=snap.fetched_at; source='snapshot';
-    }catch(e2){
-      console.warn('Kalshi snapshot also unavailable:',e2);
-      return {game:{},quarters:[{},{},{},{}],marketCount:0,source:'none',fetchedAt:null};
-    }
-  }
-  const out={game:{}, quarters:[{},{},{},{}], marketCount:0, source, fetchedAt};
-  // pairKey = sorted "ABBR|ABBR" from market yes_sub_title city names
-  function eventPairKey(markets){
-    const abbrs=new Set();
-    for(const m of markets){
-      const ab=KALSHI_CITY[m.yes_sub_title]; if(ab) abbrs.add(ab);
-    }
-    return abbrs.size===2?[...abbrs].sort().join('|'):null;
-  }
-  function groupByEvent(markets){
-    const byEvent={};
-    for(const m of markets||[]) (byEvent[m.event_ticker]=byEvent[m.event_ticker]||[]).push(m);
-    return byEvent;
-  }
-  function fill(target, markets){
-    for(const [ticker,mkts] of Object.entries(groupByEvent(markets))){
-      const key=eventPairKey(mkts);
-      if(key){ target[key]={ticker, markets:mkts}; out.marketCount+=mkts.length; }
-    }
-  }
-  fill(out.game, lists['KXWNBAGAME']);
-  QTR_SERIES.forEach((st,qi)=>fill(out.quarters[qi], lists[st]));
-  return out;
-}
-
-function marketMid(m){
-  if(!m) return null;
-  const bid=parseFloat(m.yes_bid_dollars), ask=parseFloat(m.yes_ask_dollars);
-  if(!isNaN(bid)&&!isNaN(ask)&&(bid>0||ask<1)) return (bid+ask)/2;
-  const lp=parseFloat(m.last_price_dollars);
-  return isNaN(lp)?null:lp;
-}
+async function fetchKalshi(){ return {game:{}, quarters:[{},{},{},{}], source:'none'}; }
 
 // de-vig a game event → P(home wins), plus raw sides for display
 function kalshiGameProbs(ev, homeAbbr, awayAbbr){
@@ -1028,7 +974,6 @@ function renderTrackBar(){
     html+=`<span class="track-stat">Quarter picks: <b>${s.qHit}/${s.qN}</b>${pct(s.qHit,s.qN)}</span>`;
     if(s.vgN) html+=`<span class="track-stat">ML value bets (≥3% EV): <b>${s.vgHit}/${s.vgN}</b> · ROI <b class="${s.vgROI>=0?'track-good':'track-bad'}">${s.vgROI>=0?'+':''}${(s.vgROI/s.vgN*100).toFixed(0)}%</b></span>`;
     if(s.spN) html+=`<span class="track-stat">Spread bets (≥4% EV): <b>${s.spHit}/${s.spN}</b> · ROI <b class="${s.spROI>=0?'track-good':'track-bad'}">${s.spROI>=0?'+':''}${(s.spROI/s.spN*100).toFixed(0)}%</b></span>`;
-    if(s.vN) html+=`<span class="track-stat">vs Kalshi (≥5¢): <b>${s.vHit}/${s.vN}</b>${pct(s.vHit,s.vN)}</span>`;
   }
   html+=betsHtml();
   html+=clvHtml();
@@ -1310,7 +1255,6 @@ function renderGame(g, model, kGame, kQtrs){
   const sourcesHtml=`<div class="sources-panel">
     ${srcRow('src-model','🧠 Model',model?model.pHomeGame:null,model?`margin ${model.mu>0?'+':''}${model.mu.toFixed(1)}`:'')}
     ${srcRow('src-vegas','💰 Vegas',vegasP,g.inlineOdds?`${g.inlineOdds.provider}${g.inlineOdds.awayML!=null?` ${fmtML(g.inlineOdds.awayML)}/${fmtML(g.inlineOdds.homeML)}`:''}`:'')}
-    ${srcRow('src-kalshi','📈 Kalshi',kGame?kGame.homeP:null,kGame?`mid, de-vigged`:'')}
   </div>`;
 
   // ── quarter grid ──
@@ -1377,14 +1321,13 @@ function renderGame(g, model, kGame, kQtrs){
     <div class="qtr-block">
       <div class="qtr-hdr">
         <div class="qtr-title">⏱ Quarter-by-Quarter</div>
-        <div class="qtr-note">${(live&&g.isLive)?`live re-prediction${kalshiIsLive?' · Kalshi live':' · Kalshi prices are a pregame snapshot'}`:`model scores${hasActual?' + actuals':''} · Kalshi 3-way de-vigged`}</div>
+        <div class="qtr-note">${(live&&g.isLive)?'live re-prediction':`model scores${hasActual?' + actuals':''}`}</div>
       </div>
       <div class="qtr-scroll"><table class="qtr-table">
         <tr><th></th>${th}</tr>
         <tr class="qt-away"><td>${g.awayAbbr}${b2bA}</td>${awayCells}<td class="qt-final-col">${model.expA.toFixed(0)}${hasActual?`<span class="qt-actual">act ${g.awayScore}</span>`:''}</td></tr>
         <tr class="qt-home"><td>${g.homeAbbr}${b2bH}</td>${homeCells}<td class="qt-final-col">${model.expH.toFixed(0)}${hasActual?`<span class="qt-actual">act ${g.homeScore}</span>`:''}</td></tr>
         <tr><td class="qt-rowlbl">Model</td>${modelCells}${finalModel}</tr>
-        <tr><td class="qt-rowlbl">Kalshi</td>${kalshiCells}${finalKalshi}</tr>
         <tr><td class="qt-rowlbl">Edge</td>${edgeCells}${finalEdge}</tr>
       </table></div>
     </div>`;
@@ -1462,7 +1405,6 @@ function renderGame(g, model, kGame, kQtrs){
       <div class="kd-row"><span>De-vigged P(${g.homeAbbr})</span><span>${fmtPct(kGame.homeP,1)}</span></div>
     </div>`:''}
     <div class="detail-cta">
-      <a class="kalshi-link" href="https://kalshi.com/markets/kxwnbagame" target="_blank" rel="noopener">Kalshi game markets ↗</a>
       <a class="kalshi-link" href="https://kalshi.com/markets/kxwnba1qwinner" target="_blank" rel="noopener">Quarter markets ↗</a>
       <span>Predictions auto-logged pregame and graded from final linescores.</span>
     </div>
@@ -1543,13 +1485,6 @@ async function init(){
   document.getElementById('status-banner').style.display='none';
   document.getElementById('games-hdr').style.display='flex';
   document.getElementById('badge-count').textContent=`${games.length} game${games.length!==1?'s':''}`;
-  kalshiIsLive=(kalshi.source==='live');
-  let mktTxt=`${kalshi.marketCount} Kalshi markets`;
-  if(kalshi.source==='snapshot'&&kalshi.fetchedAt){
-    const ageMin=Math.max(0,Math.round((Date.now()-new Date(kalshi.fetchedAt).getTime())/60000));
-    mktTxt+=` · snapshot ${ageMin}m ago`;
-  }
-  document.getElementById('badge-mkts').textContent=mktTxt;
   renderTrackBar();
 
   if(!games.length){
