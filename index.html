@@ -131,6 +131,8 @@
       padding:13px 16px;margin:2px 0 6px;
     }
     .bb-title{font-size:.82rem;font-weight:800;color:#86efac;letter-spacing:.02em;margin-bottom:8px;display:flex;align-items:center;gap:8px}
+    .bb-sub{font-size:.68rem;font-weight:700;color:var(--dim);text-transform:uppercase;
+      letter-spacing:.04em;padding:8px 18px 2px}
     .bb-count{background:rgba(34,197,94,.2);color:#86efac;border-radius:10px;padding:1px 9px;font-size:.72rem}
     .bb-empty{font-size:.8rem;color:var(--dim2)}
     .bb-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:5px 0;border-top:1px solid rgba(255,255,255,.05);font-size:.8rem}
@@ -4187,31 +4189,73 @@ function renderFbTrackBar(LG){
 // the measurements. The bar matches the card's: a raw gap must clear
 // CARD_MIN_EDGE after CARD_CROSS_SHRINK, i.e. about 2.35pp.
 function fbCrossPlays(LG){
-  const out=[];
+  const res=crossScan(LG);
+  return res.plays;
+}
+// Scans one league and returns BOTH the qualifying plays and the closest miss.
+// The miss matters: a panel that only ever says "nothing today" is
+// indistinguishable from a panel that is broken, and this page has shipped
+// several things that silently returned nothing.
+function crossScan(LG){
+  const plays=[];
   const bar=CARD_MIN_EDGE/CARD_CROSS_SHRINK;
+  let best=null, scanned=0;
   for(const r of (FV_ROWS[LG]||[])){
-    const so=sharpFairFor(r.homeFull||r.homeName, r.awayFull||r.awayName, r.start, LG);
-    if(!so || so.fairHome==null) continue;
+    // MLB publishes fairSharp on the row already; football has to look it up.
+    let fairHome=(r.fairSharp!=null)?r.fairSharp:null;
+    let books=(r.sharpBooks!=null)?r.sharpBooks:null;
+    if(fairHome==null){
+      const so=sharpFairFor(r.homeFull||r.homeName, r.awayFull||r.awayName, r.start, LG);
+      if(so){ fairHome=so.fairHome; books=so.nBooks; }
+    }
+    if(fairHome==null) continue;
+    // NEVER offer a game that has already started. The board keeps publishing
+    // rows after first pitch, and on a live slate this was scanning a game 1.7h
+    // into the 3rd inning — had its gap cleared the bar it would have advised
+    // betting a game in progress at a stale price.
+    if(!(r.start!=null && r.start>Date.now())) continue;
     // A "field median" built from one or two books is not a consensus, it is one
-    // book's opinion wearing a consensus label. Thin references were showing up
-    // on small-conference games with a single book posting.
-    if(!(so.nBooks>=3)) continue;
+    // book's opinion wearing a consensus label.
+    if(!(books>=3)) continue;
+    scanned++;
     // Price is the VIGGED number you actually pay. On a sportsbook the vig IS
     // the cost, so there is no separate fee to subtract.
+    const hML=(r.bookHomeML!=null)?r.bookHomeML:r.mlHome;
+    const aML=(r.bookAwayML!=null)?r.bookAwayML:r.mlAway;
     const sides=[
-      {side:r.home, name:r.homeName||r.home, fair:so.fairHome, ml:r.mlHome},
-      {side:r.away, name:r.awayName||r.away, fair:1-so.fairHome, ml:r.mlAway},
+      {side:r.home, name:r.homeName||r.home, fair:fairHome,   ml:hML},
+      {side:r.away, name:r.awayName||r.away, fair:1-fairHome, ml:aML},
     ];
     for(const x of sides){
       if(x.ml==null) continue;
-      const paid=mlToRawProb(x.ml);
-      const raw=x.fair-paid;
-      if(raw>=bar) out.push({...x, raw, edge:raw*CARD_CROSS_SHRINK, books:so.nBooks,
-                             matchup:(r.away||'')+'@'+(r.home||'')});
+      const raw=x.fair-mlToRawProb(x.ml);
+      const rec={...x, raw, edge:raw*CARD_CROSS_SHRINK, books,
+                 matchup:(r.away||'')+'@'+(r.home||'')};
+      if(raw>=bar) plays.push(rec);
+      if(!best || raw>best.raw) best=rec;
     }
   }
-  out.sort((a,b)=>b.edge-a.edge);
-  return out;
+  plays.sort((a,b)=>b.edge-a.edge);
+  return {plays, best, scanned, bar};
+}
+// One row, rendered the same way in every panel.
+function crossRowHtml(p){
+  return '<div class="bb-row"><span class="bb-mu">'+esc(p.matchup)+'</span>'
+    +'<span class="bb-type bb-type-ml">ML</span>'
+    +'<span class="bb-pick">'+esc(p.name)+' '+fvAmer(p.ml)+'</span>'
+    +'<span class="bb-edge">+'+(p.edge*100).toFixed(1)+'pp</span>'
+    +'<span class="bb-ok">fair '+(p.fair*100).toFixed(0)+'%</span>'
+    +'<span class="bb-need">need '+fvAmer(breakEvenAmerican(p.fair))+' or better</span>'
+    +'<span class="bb-stake">'+p.books+' books</span></div>';
+}
+// "Nothing today" plus the evidence that it looked.
+function crossMissHtml(res){
+  if(!res.scanned) return '<div class="bb-foot">No game had a multi-book reference yet &mdash; '
+    +'the price feed carries fewer than 3 books for this slate.</div>';
+  const b=res.best;
+  return '<div class="bb-foot">&#x1F50E; Scanned <b>'+res.scanned+'</b> game'+(res.scanned!==1?'s':'')
+    +' with a 3+ book reference. Closest was <b>'+esc(b.matchup)+' '+esc(b.name)+'</b> at '
+    +'<b>'+(b.raw*100).toFixed(2)+'pp</b> against a '+(res.bar*100).toFixed(2)+'pp bar.</div>';
 }
 // NFL "Best Bets" is the same component the other two views use, and it is
 // deliberately empty by construction: there is no NFL model, so nothing can flag
@@ -4227,7 +4271,8 @@ function renderFbBestBets(LG){
   const _m=FB_MODELS[LG]&&FB_MODELS[LG]();
   const _wf=(_m&&_m.walkForward&&_m.walkForward.rate!=null)
     ? (_m.walkForward.rate*100).toFixed(1)+'% straight up walk-forward' : 'not yet measured';
-  const plays=fbCrossPlays(LG);
+  const scan=crossScan(LG);
+  const plays=scan.plays;
   if(plays.length){
     let rows='';
     for(const p of plays){
@@ -4254,6 +4299,7 @@ function renderFbBestBets(LG){
     +'<div class="bb-empty">Nothing flagged. There is a model on this view now &mdash; '+_wf+' &mdash; '
     +'but it is registered <b>unproven</b> (weight 0) until it has been measured against the closing price, and until then it '
     +'cannot put a bet here. Every earlier model on this site beat the base rate and still lost to the price.</div>'
+    +crossMissHtml(scan)
     +'<div class="bb-foot"><b>What was measured instead:</b> DraftKings&rsquo; spread NUMBER differs from the rest of '
     +'the market on about <b>27%</b> of games, which is real dispersion &mdash; moneylines had none at all. But priced '
     +'properly it pays nothing: a half point at 3 is worth ~4pp because <b>15.4% of NFL games land on exactly 3</b>, and '
@@ -4289,14 +4335,27 @@ function renderBestBets(container, hdr){
   const staleNote = ageMin==null ? '' :
     `<div class="bb-foot" style="color:${ageMin<=35?'#fbbf24':'#f87171'};margin-top:6px">`
     + `${ageMin<=35?'&#x1F551;':'&#x26A0;&#xFE0F;'} Priced off a <b>${ageMin}-min-old</b> snapshot, not a live quote.</div>`;
+  // Price candidates: the same model-free comparison NFL and CFB use, the
+  // field's de-vigged fair against the price DraftKings charges. This panel used
+  // to consider ONLY model plays, and the MLB model is shrunk all the way to the
+  // market because it was measured and lost — so the panel could never fire,
+  // no matter what the prices were doing.
+  const cross=crossScan('mlb');
+  const crossHtml=cross.plays.length
+    ? '<div class="bb-sub">&#x1F4B1; Price plays <span style="font-weight:400;opacity:.6;font-size:.62rem">no model involved</span></div>'
+      + cross.plays.map(crossRowHtml).join('')
+    : '';
   if(!plays.length){
-    // This is the honest steady state, not a loading failure. The full-game
-    // model was measured against the Kalshi price over 134 replayed games and
-    // did not beat it, so its fair value is shrunk all the way to the market
-    // and nothing clears the bar. Say that plainly instead of implying a
-    // signal is coming.
-    card.innerHTML=`<div class="bb-title">&#x1F3AF; MLB Best Bets ${sub}</div>`
-      + `<div class="bb-empty">No +EV plays — the model agrees with the market, which is what the measurement predicts. Price shopping lives on the Fair Value Board.</div>`
+    // The model half is the honest steady state, not a loading failure: measured
+    // over 134 replayed games, it did not beat the price, so its fair value is
+    // shrunk to the market and nothing clears. The PRICE half can still fire.
+    card.innerHTML=`<div class="bb-title">&#x1F3AF; MLB Best Bets `
+      + (cross.plays.length?`<span class="bb-count">${cross.plays.length}</span> `:'')
+      + `${sub}</div>`
+      + (cross.plays.length
+          ? crossHtml + `<div class="bb-foot"><b>These are price comparisons, not forecasts.</b> Fair value is the median of every other book with DraftKings deliberately EXCLUDED, and the price is the vigged number you actually pay. The MLB model contributed nothing — it lost to the closing price over 134 replayed games, so its fair value is shrunk all the way to the market.</div>`
+          : `<div class="bb-empty">No +EV plays. The model agrees with the market — which is what the measurement predicts — and no book price is far enough from the field to be worth taking.</div>`
+            + crossMissHtml(cross))
       + roi;
   }else{
     let rows='';
@@ -4311,7 +4370,8 @@ function renderBestBets(container, hdr){
         +`<span class="bb-edge">+${(b.ev*100).toFixed(1)}% EV</span>`
         +`<span class="bb-ok">fair ${(b.fair*100).toFixed(0)}%</span>${need}${cap}</div>`;
     }
-    card.innerHTML=`<div class="bb-title">&#x1F3AF; MLB Best Bets <span class="bb-count">${plays.length}</span> ${sub}</div>`
+    card.innerHTML=`<div class="bb-title">&#x1F3AF; MLB Best Bets <span class="bb-count">${plays.length+cross.plays.length}</span> ${sub}</div>`
+      + crossHtml
       + rows
       + `<div class="bb-foot"><b>Fair value is the model shrunk toward the de-vigged DraftKings price</b>, not the raw model — otherwise a market moving against a pick reads as a bigger edge. Stake is quarter-Kelly, capped per game and per day. <b>"need X or better"</b> is the worst price still +EV. Not financial advice.</div>`
       + staleNote + roi;
