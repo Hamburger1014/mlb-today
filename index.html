@@ -665,12 +665,14 @@
 </div>
 
 <!-- ── NFL VIEW ──
-     Market-only by design. There is no NFL model and there should not be one:
-     the three models that were measured all lost to the price, so shipping a
-     fourth would be decoration. This view shows what the book posted and what
-     it means once the vig is removed, in the same card shape as WNBA. -->
+     Was market-only by design; now carries a model at Gabriel's request, with a
+     projected final and a quarter-by-quarter table like the WNBA view.
+     The old rationale still stands as a WARNING rather than a prohibition: the
+     three models measured before this one all lost to the closing price. So this
+     one ships as a PREDICTION and is registered unproven (bet:false, w:0). It
+     logs forward and earns a Best Bets slot only if measurement says so. -->
 <div id="nfl-view" style="display:none">
-  <div class="view-intro">🏈 <b>NFL</b> · <b>Market only — no model, and that is deliberate.</b> Every prediction model on this site was measured against the closing price and none of them beat it, so this view shows the DraftKings line and its de-vigged fair value rather than a forecast. "Need" is the worst price still worth taking.</div>
+  <div class="view-intro">🏈 <b>NFL</b> · Projected score + quarter-by-quarter, next to the de-vigged DraftKings price · Ratings fit on <b>858 completed games (2023&ndash;2025)</b>, points-based with recency weighting &mdash; <b>60.0% straight up</b> walk-forward on the held-out 2025 season, 10.3 pts mean margin error · Home field comes out at <b>+2.1 pts</b>, not the folklore 3 · <b>Unproven against the price</b> &mdash; every earlier model here lost to it, so these are predictions, not bets. "Need" is the worst price still worth taking.</div>
   <main>
     <div id="nfl-status" role="status" aria-live="polite" style="text-align:center;padding:30px;color:var(--dim)">Loading NFL lines…</div>
     <div id="nfl-track-bar" class="track-bar" style="display:none"></div>
@@ -768,6 +770,7 @@ function switchView(v){
     stopLiveScorePolling();
     Promise.all([fvFetchFootball().catch(()=>{}), loadFootballLines().catch(()=>{})])
       .then(renderNFL).catch(()=>renderNFL());
+    loadNflModel().then(renderNFL).catch(()=>{});
     renderNFL();
   }
   else if(v==='fv'){
@@ -851,6 +854,10 @@ async function fvFetchFootball(force){
           id:key+':'+ev.id, gameId:ev.id, idSrc:'espn', league:cfg.label,
           home:home.team?.abbreviation||'HOME', away:away.team?.abbreviation||'AWAY',
           start:ev.date?Date.parse(ev.date):null,
+          // 1 = preseason. The model is fit on regular-season football only, and
+          // preseason is a different sport: starters sit, so team strength barely
+          // applies. Carried so the card can refuse to predict rather than guess.
+          seasonType:(ev.season||{}).type||null,
           fairHome:dv?dv[0]:null, source:(o.provider?.name||'Book')+' (de-vigged)',
           spreadLine:spDv?_fvNum(ps.home?.close?.line):null, spreadFairHome:spDv?spDv[0]:null,
           totalLine:tDv?_fvNum(tt.over?.close?.line):null, totalFairOver:tDv?tDv[0]:null,
@@ -886,6 +893,98 @@ function fvSetFilter(v){ FV_FILTER=v; renderFairValue(); }
 //  nothing here beat the price and pretending otherwise would be the exact
 //  mistake the rest of this session was spent undoing.
 // ═══════════════════════════════════════════════════════════════
+// ── NFL MODEL ────────────────────────────────────────────────────────────────
+// Ratings fitted offline by scripts/nfl_model.py on 858 completed games
+// (2023-2025). Walk-forward on the held-out 2025 season: 60.0% straight up,
+// 10.33 pts mean absolute margin error, Brier 0.228.
+//
+// SHIPS AS A PREDICTION, NOT A BET. Registered unproven below (bet:false, w:0)
+// on the same terms MLB's was. Every model on this site has been measured
+// against the closing price and none has beaten it; this one has not been
+// measured at all yet, because the season has not started. It logs forward and
+// earns a Best Bets slot only if the measurement later says so.
+let NFL_MODEL=null;
+async function loadNflModel(){
+  try{
+    const r=await fetch('data/nfl_model.json?cb='+Date.now());
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    NFL_MODEL=await r.json();
+  }catch(e){ NFL_MODEL=null; }
+}
+// Move a pmf's mean without touching its shape: p(x) proportional to
+// p(x)*exp(theta*x), theta by bisection. The shape is the empirical
+// distribution of NFL quarter points, so 1- and 2-point quarters stay
+// impossible and the spike at 7 survives — which no Poisson reproduced.
+function nflTilt(base, target){
+  const ks=Object.keys(base).map(Number);
+  let lo=-3, hi=3, th=0;
+  for(let i=0;i<80;i++){
+    th=(lo+hi)/2;
+    let s=0,m=0;
+    for(const k of ks){ const w=base[k]*Math.exp(th*k); s+=w; m+=k*w; }
+    if(m/s < target) lo=th; else hi=th;
+  }
+  th=(lo+hi)/2;
+  const out={}; let s=0;
+  for(const k of ks){ const w=base[k]*Math.exp(th*k); out[k]=w; s+=w; }
+  for(const k of ks) out[k]/=s;
+  return out;
+}
+function nflQtrOutcome(pmfH, pmfA){
+  let h=0,t=0,a=0;
+  for(const x in pmfH) for(const y in pmfA){
+    const p=pmfH[x]*pmfA[y];
+    if(+x>+y) h+=p; else if(+x===+y) t+=p; else a+=p;
+  }
+  return {pHome:h, pTie:t, pAway:a};
+}
+function nflPredict(home, away){
+  const M=NFL_MODEL;
+  if(!M||!M.quarterPmf) return null;
+  const off=M.off||{}, dfn=M.def||{};
+  // An unseen team (relocation, a new abbreviation) falls back to league
+  // average rather than throwing the whole card away.
+  const oh=off[home]||0, dh=dfn[home]||0, oa=off[away]||0, da=dfn[away]||0;
+  const ph=M.mu+oh+da+M.hfa, pa=M.mu+oa+dh;
+  const quarters=[];
+  for(let i=0;i<4;i++){
+    const sh=M.quarterShares[i];
+    const qh=nflTilt(M.quarterPmf, Math.max(ph*sh,0.05));
+    const qa=nflTilt(M.quarterPmf, Math.max(pa*sh,0.05));
+    const o=nflQtrOutcome(qh,qa);
+    quarters.push({...o, hPts:ph*sh, aPts:pa*sh});
+  }
+  // Win probability from the margin. marginScale is the SD-like constant the
+  // offline fit validated at Brier 0.228; deriving it from a score convolution
+  // instead would double-count the same uncertainty.
+  const margin=ph-pa;
+  return {homePts:ph, awayPts:pa, margin,
+          pHomeGame:1/(1+Math.exp(-margin/(M.marginScale||7.5))), quarters};
+}
+function nflQuarterTable(r, pred){
+  if(!pred) return '';
+  const row=(lbl,vals,cls)=>`<tr><td class="${cls||''}">${lbl}</td>`+vals.map(v=>`<td>${v}</td>`).join('')+'</tr>';
+  const h=pred.quarters.map(q=>q.hPts.toFixed(1));
+  const a=pred.quarters.map(q=>q.aPts.toFixed(1));
+  const win=pred.quarters.map(q=>{
+    const best=Math.max(q.pHome,q.pTie,q.pAway);
+    const who=best===q.pHome?esc(r.home):best===q.pAway?esc(r.away):'TIE';
+    return `${who} ${Math.round(best*100)}%`;
+  });
+  return `<div class="qtr-wrap">
+    <div class="qtr-hdr"><span>&#x23F1; Quarter-by-quarter</span><span class="qtr-src">model scores</span></div>
+    <table class="qtr-table">
+      <thead><tr><th></th><th>Q1</th><th>Q2</th><th>Q3</th><th>Q4</th><th>FINAL</th></tr></thead>
+      <tbody>
+        ${row(esc(r.away), a.concat([`<b>${Math.round(pred.awayPts)}</b>`]), 'qt-away')}
+        ${row(esc(r.home), h.concat([`<b>${Math.round(pred.homePts)}</b>`]), 'qt-home')}
+        ${row('Likely', win.concat([`<b>${pred.pHomeGame>=0.5?esc(r.home):esc(r.away)} ${Math.round(Math.max(pred.pHomeGame,1-pred.pHomeGame)*100)}%</b>`]), 'qt-lbl')}
+      </tbody>
+    </table>
+    <div class="qtr-note">Quarter ties are ordinary in football &mdash; 17.7% of real quarters end level, and the model puts 17.9% there.</div>
+  </div>`;
+}
+
 function renderNFL(){
   const box=document.getElementById('nfl-games'), st=document.getElementById('nfl-status');
   if(!box) return;
@@ -933,6 +1032,16 @@ function renderNFL(){
     // fair price is — both honest orderings that need no forecast.
     // Every row here is pregame: the fetcher above drops anything that is not
     // STATUS_SCHEDULED, so there is no live/final state to filter on.
+    // No model on preseason. On a live board it had Detroit at 59% while the
+    // market had Cincinnati at 73% — a 32-point disagreement that is not insight,
+    // it is the model applying regular-season ratings to a game where the teams
+    // barely play their starters.
+    const isPre=(r.seasonType===1);
+    const pred=isPre?null:nflPredict(r.home,r.away);
+    // Display consensus is a plain average of model and market, the same shape
+    // MLB and WNBA use. It is a READING, not a bet — betting weight is governed
+    // by MARKET_EVIDENCE, and this model is registered unproven at w:0.
+    const cons=(pred&&fh!=null)?(pred.pHomeGame+fh)/2:(pred?pred.pHomeGame:fh);
     const _raw=(r.mlHome!=null)?mlToRawProb(r.mlHome):null;
     const _val=(r.fairHome!=null&&_raw!=null)?Math.abs(r.fairHome-_raw):-1;
     const _edg=(r.fairHome!=null)?Math.abs(r.fairHome-0.5):0;
@@ -956,21 +1065,24 @@ function renderNFL(){
       </div>
       <div class="consensus-block">
         <div class="consensus-header">
-          <div class="consensus-title">📈 Market fair value <span style="font-weight:400;opacity:.6;font-size:.6rem">de-vigged · no model</span></div>
+          <div class="consensus-title">&#x1F3AF; Consensus <span style="font-weight:400;opacity:.6;font-size:.6rem">${pred&&fh!=null?'model + vegas':pred?'model only':'market only'}</span></div>
           <div class="consensus-pick ${pickCls}">${pickTxt}</div>
         </div>
-        ${fh!=null?`<div class="consensus-bar-row">
+        ${cons!=null?`<div class="consensus-bar-row">
           <div class="cb-abbr away">${esc(r.away)}</div>
-          <div class="consensus-bar-track"><div class="cbar-away" style="width:${(1-fh)*100}%"></div><div class="cbar-home"></div></div>
+          <div class="consensus-bar-track"><div class="cbar-away" style="width:${(1-cons)*100}%"></div><div class="cbar-home"></div></div>
           <div class="cb-abbr home">${esc(r.home)}</div>
         </div>
-        <div class="consensus-vals"><div class="cv away">${pct(1-fh)}</div><div class="cv home">${pct(fh)}</div></div>
-        <div class="wnba-proj">Need <b>${need(1-fh)}</b> on ${esc(r.away)} · <b>${need(fh)}</b> on ${esc(r.home)}</div>`
+        <div class="consensus-vals"><div class="cv away">${pct(1-cons)}</div><div class="cv home">${pct(cons)}</div></div>
+        ${pred?`<div class="wnba-proj">Projected final: <b>${esc(r.home)} ${Math.round(pred.homePts)} &mdash; ${esc(r.away)} ${Math.round(pred.awayPts)}</b></div>`:''}
+        ${fh!=null?`<div class="wnba-proj">Need <b>${need(1-fh)}</b> on ${esc(r.away)} &middot; <b>${need(fh)}</b> on ${esc(r.home)}</div>`:''}`
         :`<div class="wnba-proj">DraftKings has not posted a moneyline for this game.</div>`}
       </div>
       <div class="sources-panel">
+        ${pred?srcRow('&#x1F9E0; Model', pred.pHomeGame, `margin ${pred.margin>=0?'+':''}${pred.margin.toFixed(1)}`):''}
         ${srcRow('💰 '+esc(r.book||'Book'), fh, r.mlHome!=null?`${fmtML(r.mlAway)} / ${fmtML(r.mlHome)}`:'')}
       </div>
+      ${isPre?`<div class="qtr-note" style="padding:8px 18px">&#x1F3C8; <b>Preseason</b> &mdash; no model shown. The ratings are fit on regular-season football, where both teams play their starters; applying them here would produce a confident number about a game the model does not understand.</div>`:nflQuarterTable(r,pred)}
       <div class="qtr-block">
         <div class="qtr-hdr"><span class="qtr-title">📐 Lines</span><span class="qtr-note">fair % and the worst price still worth taking</span></div>
         <div class="qtr-scroll"><table class="qtr-table" style="min-width:0"><thead><tr><th>Market</th><th>Line</th><th>Fair</th><th>Need</th></tr></thead><tbody>
@@ -3972,7 +4084,7 @@ function renderNflTrackBar(){
   const logged=lines?Object.values(lines).filter(g=>g&&g.league==='NFL').length:0;
   if(!bets.length&&!logged){ el.style.display='none'; return; }
   el.style.display='flex';
-  let h='<span>&#x1F4D3; <b>Prediction log</b> <span style="color:var(--dim2)">market only &mdash; no model to grade</span></span>';
+  let h='<span>&#x1F4D3; <b>Prediction log</b> <span style="color:var(--dim2)">model unproven &mdash; logging forward</span></span>';
   if(r.n)
     h+='<span class="track-stat">Your bets: <b>'+r.w+'&ndash;'+r.l+'</b> &middot; ROI <b class="'
       +(r.roi>=0?'track-good':'track-bad')+'">'+(r.roi>=0?'+':'')+(r.roi*100).toFixed(0)+'%</b></span>';
@@ -4004,10 +4116,11 @@ function renderNflTrackBar(){
 function renderNflBestBets(){
   const el=document.getElementById('nfl-best-bets');
   if(!el) return;
-  const sub='<span style="font-weight:400;opacity:.6;font-size:.62rem">market only &mdash; no model</span>';
+  const sub='<span style="font-weight:400;opacity:.6;font-size:.62rem">model unproven &mdash; nothing eligible</span>';
   el.innerHTML='<div class="best-bets"><div class="bb-title">&#x1F3AF; NFL Best Bets '+sub+'</div>'
-    +'<div class="bb-empty">Nothing flagged, and nothing can be &mdash; there is no NFL model here on purpose. '
-    +'Every model on this site was measured against the closing price and none beat it, so a fourth would be decoration.</div>'
+    +'<div class="bb-empty">Nothing flagged. There is a model on this view now &mdash; 60.0% straight up walk-forward &mdash; '
+    +'but it is registered <b>unproven</b> (weight 0) until it has been measured against the closing price, and until then it '
+    +'cannot put a bet here. Every earlier model on this site beat the base rate and still lost to the price.</div>'
     +'<div class="bb-foot"><b>What was measured instead:</b> DraftKings&rsquo; spread NUMBER differs from the rest of '
     +'the market on about <b>27%</b> of games, which is real dispersion &mdash; moneylines had none at all. But priced '
     +'properly it pays nothing: a half point at 3 is worth ~4pp because <b>15.4% of NFL games land on exactly 3</b>, and '
