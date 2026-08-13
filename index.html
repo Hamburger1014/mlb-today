@@ -3738,6 +3738,14 @@ const CARD_MAX_STALE_MIN = 35;
 // illusion. Kalshi's taker fee peaks at 1.75c on a coin flip.
 function _cardCost(p){ return KALSHI_FEE*p*(1-p); }
 
+// Decimal payout of an American price. The card needs this and cannot reach the
+// WNBA module's copy — that one is private to the window.WNBA IIFE, in a later
+// <script> block. cardCandidates() called it anyway and would have thrown
+// ReferenceError the first time a model play reached that line; it never did,
+// because every play was dropped one line earlier by a `mkt == null` guard that
+// was itself a bug. Two latent faults masking each other.
+function cardPayout(ml){ return ml>0 ? ml/100 : 100/Math.abs(ml); }
+
 function cardCandidates(){
   const out=[];
   const add=(league,row,sideHome,pFair,pPrice,kind,note,priceAmer)=>{
@@ -3800,7 +3808,7 @@ function cardCandidates(){
     const raw=b.p-b.mkt;
     const edge=raw*CARD_MODEL_SHRINK;
     if(edge<CARD_MIN_EDGE) continue;
-    const bo=mlPayout(b.ml);
+    const bo=cardPayout(b.ml);
     const kelly=bo>0?Math.max(0,(b.p*(bo+1)-1)/bo):0;
     out.push({league:b.league||'WNBA', kind:'MODEL',
       note:b.type==='SPREAD'?'spread model (w=0.40)':'moneyline model (w=0.15)',
@@ -4526,9 +4534,14 @@ function bestSpreadBet(model,g){
     const cond=Math.min(1-1e-6,Math.max(1e-6,p/live));       // P(cover | no push)
     return _ilogit(W*_logit(cond)+(1-W)*_logit(dv?dv[0]:0.5))*live;
   };
+  // dv is conditional on no push and sums to 1; p above is UNCONDITIONAL
+  // (already scaled by `live`). Carry the market in the same units or any
+  // comparison between them is off by the push mass.
   const opts=[
-    {side:g.homeAbbr,key:'h',line:g.spread.home.line,ml:g.spread.home.odds,p:shrink(pHome),raw:pHome},
-    {side:g.awayAbbr,key:'a',line:g.spread.away.line,ml:g.spread.away.odds,p:live-shrink(pHome),raw:pAway},
+    {side:g.homeAbbr,key:'h',line:g.spread.home.line,ml:g.spread.home.odds,p:shrink(pHome),raw:pHome,
+     mkt:dv?dv[0]*live:null},
+    {side:g.awayAbbr,key:'a',line:g.spread.away.line,ml:g.spread.away.odds,p:live-shrink(pHome),raw:pAway,
+     mkt:dv?dv[1]*live:null},
   ].map(o=>({...o,pPush,ev:betEV(o.p,pPush,o.ml),need:breakEvenAmerican(o.p/Math.max(live,1e-9))}));
   opts.sort((x,y)=>y.ev-x.ev);
   const best=opts[0];
@@ -5350,7 +5363,7 @@ async function load(){
       }
       const vBet=bestVegasBet(model,g);
       if(vBet&&!vBet.blocked&&!vBet.movedAgainst&&!vBet.belowEdgeFloor&&vBet.ev>=0.03)
-        plays.push({type:'ML',matchup:mtc,side:vBet.side,ml:vBet.ml,ev:vBet.ev,p:vBet.p,pPush:0,
+        plays.push({type:'ML',matchup:mtc,side:vBet.side,ml:vBet.ml,ev:vBet.ev,p:vBet.p,pPush:0,mkt:vBet.mkt,
           gameId:g.espnId,need:vBet.need,sideIsHome:vBet.key==='h',
           start:g.gameDate?Date.parse(g.gameDate):null,
           label:`${vBet.side} ML ${fmtML(vBet.ml)}`,kelly:Math.min(0.05,vBet.ev/mlPayout(vBet.ml)/4)});
@@ -5358,7 +5371,7 @@ async function load(){
       // ~1 pt, worth ~3% of probability — comparable to the edge itself.
       const sBet=bestSpreadBet(model,g);
       if(sBet&&!sBet.blocked&&sBet.ev>=0.04)
-        plays.push({type:'SPREAD',matchup:mtc,side:sBet.side,ml:sBet.ml,ev:sBet.ev,p:sBet.p,pPush:sBet.pPush,
+        plays.push({type:'SPREAD',matchup:mtc,side:sBet.side,ml:sBet.ml,ev:sBet.ev,p:sBet.p,pPush:sBet.pPush,mkt:sBet.mkt,
           gameId:g.espnId,need:sBet.need,sideIsHome:true,line:sBet.line,
           start:g.gameDate?Date.parse(g.gameDate):null,
           label:`${sBet.side} ${fmtLine(sBet.line)} (${fmtML(sBet.ml)})`,
