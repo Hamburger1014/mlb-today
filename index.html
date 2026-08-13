@@ -597,6 +597,7 @@
   <button class="nav-item active" data-view="mlb" onclick="switchView('mlb')">⚾ MLB Today</button>
   <button class="nav-item" data-view="wnba" onclick="switchView('wnba')">🏀 WNBA Today</button>
   <button class="nav-item" data-view="nfl" onclick="switchView('nfl')">🏈 NFL</button>
+  <button class="nav-item" data-view="cfb" onclick="switchView('cfb')">🏈 College FB</button>
   <button class="nav-item" data-view="fv" onclick="switchView('fv')">📋 Fair Value</button>
 </nav>
 
@@ -687,6 +688,25 @@
   </main>
 </div>
 
+<!-- ── CFB VIEW ──
+     Same renderer as NFL (renderFootballView), different fit. College has no
+     preseason, so unlike the NFL view this one is live from week one. -->
+<div id="cfb-view" style="display:none">
+  <div class="view-intro">🏈 <b>College Football</b> · Projected score + quarter-by-quarter, next to the de-vigged DraftKings price · Ratings fit on <b>2764 completed FBS games (2023&ndash;2025)</b> &mdash; <b>66.0% straight up</b> walk-forward on the held-out 2025 season, 14.9 pts mean margin error · Home field is <b>+5.3 pts</b>, more than double the NFL's · Sub-FBS opponents are pooled into one <b>OTHER</b> rating (&minus;21.5) because one game each is not a rating · <b>Unproven against the price</b> &mdash; predictions, not bets.</div>
+  <main>
+    <div id="cfb-status" role="status" aria-live="polite" style="text-align:center;padding:30px;color:var(--dim)">Loading CFB lines…</div>
+    <div id="cfb-track-bar" class="track-bar" style="display:none"></div>
+    <div class="section-hdr" id="cfb-games-hdr" style="display:none;padding:0 18px">
+      <span>Today's Games</span>
+      <div class="section-badges">
+        <span class="sc-badge" id="cfb-badge-count">0 games</span>
+      </div>
+    </div>
+    <div id="cfb-best-bets"></div>
+    <div id="cfb-games" style="display:flex;flex-direction:column;gap:12px"></div>
+  </main>
+</div>
+
 <!-- ── FAIR VALUE BOARD ──
      The one screen that does not involve a model. Sharp price in, de-vigged
      fair value out, and the worst price still worth taking. That comparison is
@@ -746,9 +766,10 @@ function switchView(v){
   document.getElementById('wnba-view').style.display = v==='wnba'?'':'none';
   document.getElementById('fv-view').style.display   = v==='fv'?'':'none';
   document.getElementById('nfl-view').style.display  = v==='nfl'?'':'none';
+  document.getElementById('cfb-view').style.display  = v==='cfb'?'':'none';
   document.getElementById('card-view').style.display = v==='card'?'':'none';
-  const ICON={mlb:'⚾',wnba:'🏀',nfl:'🏈',fv:'📋',card:'🃏'},
-        NAME={mlb:'MLB Today',wnba:'WNBA Today',nfl:'NFL',fv:'Fair Value',card:"Today's Card"};
+  const ICON={mlb:'⚾',wnba:'🏀',nfl:'🏈',cfb:'🏈',fv:'📋',card:'🃏'},
+        NAME={mlb:'MLB Today',wnba:'WNBA Today',nfl:'NFL',cfb:'College Football',fv:'Fair Value',card:"Today's Card"};
   document.getElementById('hdr-logo').textContent    = ICON[v]||'⚾';
   document.getElementById('hdr-title').textContent   = NAME[v]||'MLB Today';
   document.querySelectorAll('.nav-item').forEach(b=>b.classList.toggle('active',b.dataset.view===v));
@@ -766,12 +787,14 @@ function switchView(v){
     fvGradeBets(CARD_LOG).then(ch=>{ if(ch){ cardLogSave(); renderCard(); } }).catch(()=>{});
     renderCard();
   }
-  else if(v==='nfl'){
+  else if(v==='nfl'||v==='cfb'){
+    // One fetch feeds both football views — fvFetchFootball pulls NFL and CFB
+    // together, so whichever you open primes the other for free.
     stopLiveScorePolling();
     Promise.all([fvFetchFootball().catch(()=>{}), loadFootballLines().catch(()=>{})])
-      .then(renderNFL).catch(()=>renderNFL());
-    loadNflModel().then(renderNFL).catch(()=>{});
-    renderNFL();
+      .then(()=>{renderNFL();renderCFB();}).catch(()=>{renderNFL();renderCFB();});
+    loadFootballModels().then(()=>{renderNFL();renderCFB();}).catch(()=>{});
+    renderNFL(); renderCFB();
   }
   else if(v==='fv'){
     stopLiveScorePolling();
@@ -791,8 +814,8 @@ function refreshActiveView(){
     fvFetchFootball(true).catch(()=>{}),
     Promise.resolve(WNBA.load()).catch(()=>{}),
   ]).then(renderCard).catch(()=>renderCard());
-  if(ACTIVE_VIEW==='nfl')  return Promise.all([fvFetchFootball(true).catch(()=>{}), loadFootballLines().catch(()=>{})])
-    .then(renderNFL).catch(()=>renderNFL());
+  if(ACTIVE_VIEW==='nfl'||ACTIVE_VIEW==='cfb') return Promise.all([fvFetchFootball(true).catch(()=>{}), loadFootballLines().catch(()=>{})])
+    .then(()=>{renderNFL();renderCFB();}).catch(()=>{renderNFL();renderCFB();});
   if(ACTIVE_VIEW==='fv')   return Promise.all([
     Promise.resolve(WNBA.load()).catch(()=>{}),
     fvFetchFootball(true).catch(()=>{}),
@@ -903,13 +926,15 @@ function fvSetFilter(v){ FV_FILTER=v; renderFairValue(); }
 // against the closing price and none has beaten it; this one has not been
 // measured at all yet, because the season has not started. It logs forward and
 // earns a Best Bets slot only if the measurement later says so.
-let NFL_MODEL=null;
-async function loadNflModel(){
-  try{
-    const r=await fetch('data/nfl_model.json?cb='+Date.now());
-    if(!r.ok) throw new Error('HTTP '+r.status);
-    NFL_MODEL=await r.json();
-  }catch(e){ NFL_MODEL=null; }
+let NFL_MODEL=null, CFB_MODEL=null;
+// Two fits of the same model, kept in separate files because the constants
+// genuinely differ: college runs a bigger home field (+5.3 vs +2.1), a wider
+// margin scale (10.5 vs 7.5) and 137 teams against 32.
+const FB_MODELS={nfl:()=>NFL_MODEL, cfb:()=>CFB_MODEL};
+async function loadFootballModels(){
+  const one=async(url)=>{ try{ const r=await fetch(url+'?cb='+Date.now());
+      return r.ok?await r.json():null; }catch(e){ return null; } };
+  [NFL_MODEL,CFB_MODEL]=await Promise.all([one('data/nfl_model.json'),one('data/cfb_model.json')]);
 }
 // Move a pmf's mean without touching its shape: p(x) proportional to
 // p(x)*exp(theta*x), theta by bisection. The shape is the empirical
@@ -938,8 +963,8 @@ function nflQtrOutcome(pmfH, pmfA){
   }
   return {pHome:h, pTie:t, pAway:a};
 }
-function nflPredict(home, away){
-  const M=NFL_MODEL;
+function nflPredict(home, away, M){
+  M=M||NFL_MODEL;
   if(!M||!M.quarterPmf) return null;
   const off=M.off||{}, dfn=M.def||{};
   // An unseen team (relocation, a new abbreviation) falls back to league
@@ -985,24 +1010,25 @@ function nflQuarterTable(r, pred){
   </div>`;
 }
 
-function renderNFL(){
-  const box=document.getElementById('nfl-games'), st=document.getElementById('nfl-status');
+function renderFootballView(LG){
+  const UP=LG.toUpperCase();
+  const box=document.getElementById(LG+'-games'), st=document.getElementById(LG+'-status');
   if(!box) return;
-  const rows=[...FV_ROWS.nfl].filter(r=>r.fairHome!=null||r.spreadFairHome!=null)
+  const rows=[...FV_ROWS[LG]].filter(r=>r.fairHome!=null||r.spreadFairHome!=null)
     .sort((a,b)=>(a.start||0)-(b.start||0));
   if(!rows.length){
-    st.style.display=''; st.textContent='No NFL lines posted yet — DraftKings has not opened this slate.'; box.innerHTML=''; return;
+    st.style.display=''; st.textContent=UP+' lines are not posted yet — DraftKings has not opened this slate.'; box.innerHTML=''; return;
   }
   st.style.display='none';
-  const hdrEl=document.getElementById('nfl-games-hdr');
+  const hdrEl=document.getElementById(LG+'-games-hdr');
   if(hdrEl){
     hdrEl.style.display='flex';
-    const cnt=document.getElementById('nfl-badge-count');
+    const cnt=document.getElementById(LG+'-badge-count');
     if(cnt) cnt.textContent=rows.length+' game'+(rows.length!==1?'s':'');
   }
-  renderNflTrackBar(); renderNflBestBets();
+  renderFbTrackBar(LG); renderFbBestBets(LG);
   const pct=p=>p==null?'—':(p*100).toFixed(0)+'%';
-  const nflCtrls=`<div class="game-controls" id="nfl-controls">
+  const nflCtrls=`<div class="game-controls" id="${LG}-controls">
     <span class="gc-lbl">Sort</span>
     <select class="gc-sel gc-sort">
       <option value="time">Start time</option>
@@ -1037,7 +1063,7 @@ function renderNFL(){
     // it is the model applying regular-season ratings to a game where the teams
     // barely play their starters.
     const isPre=(r.seasonType===1);
-    const pred=isPre?null:nflPredict(r.home,r.away);
+    const pred=isPre?null:nflPredict(r.home,r.away,FB_MODELS[LG]());
     // Display consensus is a plain average of model and market, the same shape
     // MLB and WNBA use. It is a READING, not a bet — betting weight is governed
     // by MARKET_EVIDENCE, and this model is registered unproven at w:0.
@@ -1092,8 +1118,8 @@ function renderNFL(){
       </div>
     </div>`;
   }
-  box.innerHTML=fbClvHtml('NFL')+nflCtrls+html;
-  const _nc=document.getElementById('nfl-controls');
+  box.innerHTML=fbClvHtml(UP)+nflCtrls+html;
+  const _nc=document.getElementById(LG+'-controls');
   if(_nc) wireGameControls(box, _nc);
 }
 
@@ -4074,14 +4100,17 @@ function exportMlbLog(){
   const a=document.createElement('a');
   a.href=URL.createObjectURL(blob); a.download='mlb_prediction_log.json'; a.click();
 }
-function renderNflTrackBar(){
-  const el=document.getElementById('nfl-track-bar');
+function renderNFL(){ renderFootballView('nfl'); }
+function renderCFB(){ renderFootballView('cfb'); }
+function renderFbTrackBar(LG){
+  const UP=LG.toUpperCase();
+  const el=document.getElementById(LG+'-track-bar');
   if(!el) return;
-  const bets=FV_BETS.filter(b=>b.league==='NFL');
-  const r=betsROI('NFL');
+  const bets=FV_BETS.filter(b=>b.league===UP);
+  const r=betsROI(UP);
   // FB_LINES is already the games map — loadFootballLines() unwraps `.games`.
   const lines=(typeof FB_LINES!=='undefined'&&FB_LINES)?FB_LINES:null;
-  const logged=lines?Object.values(lines).filter(g=>g&&g.league==='NFL').length:0;
+  const logged=lines?Object.values(lines).filter(g=>g&&g.league===(LG==='cfb'?'CFB':'NFL')).length:0;
   if(!bets.length&&!logged){ el.style.display='none'; return; }
   el.style.display='flex';
   let h='<span>&#x1F4D3; <b>Prediction log</b> <span style="color:var(--dim2)">model unproven &mdash; logging forward</span></span>';
@@ -4113,12 +4142,19 @@ function renderNflTrackBar(){
 // NFL "Best Bets" is the same component the other two views use, and it is
 // deliberately empty by construction: there is no NFL model, so nothing can flag
 // off one. It carries the measurement instead, which is the honest content.
-function renderNflBestBets(){
-  const el=document.getElementById('nfl-best-bets');
+function renderFbBestBets(LG){
+  const UP=LG.toUpperCase();
+  const el=document.getElementById(LG+'-best-bets');
   if(!el) return;
   const sub='<span style="font-weight:400;opacity:.6;font-size:.62rem">model unproven &mdash; nothing eligible</span>';
-  el.innerHTML='<div class="best-bets"><div class="bb-title">&#x1F3AF; NFL Best Bets '+sub+'</div>'
-    +'<div class="bb-empty">Nothing flagged. There is a model on this view now &mdash; 60.0% straight up walk-forward &mdash; '
+  // Rate comes from the loaded model, never a literal: this panel is shared by
+  // two leagues with different fits, and a hardcoded 60.0% was being shown on
+  // the CFB view, whose model is 66.0%.
+  const _m=FB_MODELS[LG]&&FB_MODELS[LG]();
+  const _wf=(_m&&_m.walkForward&&_m.walkForward.rate!=null)
+    ? (_m.walkForward.rate*100).toFixed(1)+'% straight up walk-forward' : 'not yet measured';
+  el.innerHTML='<div class="best-bets"><div class="bb-title">&#x1F3AF; '+UP+' Best Bets '+sub+'</div>'
+    +'<div class="bb-empty">Nothing flagged. There is a model on this view now &mdash; '+_wf+' &mdash; '
     +'but it is registered <b>unproven</b> (weight 0) until it has been measured against the closing price, and until then it '
     +'cannot put a bet here. Every earlier model on this site beat the base rate and still lost to the price.</div>'
     +'<div class="bb-foot"><b>What was measured instead:</b> DraftKings&rsquo; spread NUMBER differs from the rest of '
@@ -4128,7 +4164,7 @@ function renderNflBestBets(){
     +'&minus;3 charged &minus;105. <b>Taking the best number AND price across all 8&ndash;9 books still cleared a 2pp '
     +'bar on 0 of 57 games</b>, so the limit is not a single account &mdash; the number is priced away market-wide. '
     +'Use the Fair Value Board&rsquo;s &ldquo;need&rdquo; column and bet only when a softer book is longer than it.</div>'
-    +betsROIHtml('NFL')+'</div>';
+    +betsROIHtml(UP)+'</div>';
 }
 
 // Build the F5 signal strip from BEST_BETS, insert after the header.

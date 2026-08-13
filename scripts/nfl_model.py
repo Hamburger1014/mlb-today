@@ -232,17 +232,28 @@ def main():
 
     # Does the tilted pmf reproduce real quarter outcomes? This is the check the
     # parametric versions failed.
+    # Per-GAME, not a league-average matchup. Averaging one generic pairing and
+    # comparing it to real games is wrong wherever home teams are systematically
+    # stronger than away teams — which is exactly college football, where big
+    # programs buy home games. That mistake read as a 3.9pp model error.
     tie = hw = 0.0
-    m0 = fit(games)
-    for i in range(4):
-        ph = tilt(qpmf, (m0["mu"] + m0["hfa"]) * shares[i])
-        pa = tilt(qpmf, m0["mu"] * shares[i])
-        for x, px in ph.items():
-            for y, py in pa.items():
-                if x == y:
-                    tie += px * py / 4
-                elif x > y:
-                    hw += px * py / 4
+    ngm = 0
+    _m0 = fit(games)
+    for g in games:
+        if not g["hl"] or not g["al"]:
+            continue
+        gh, ga = predict_points(_m0, g["home"], g["away"])
+        ngm += 1
+        for i in range(4):
+            ph = tilt(qpmf, max(gh * shares[i], 0.05))
+            pa = tilt(qpmf, max(ga * shares[i], 0.05))
+            for x, px in ph.items():
+                for y, py in pa.items():
+                    if x == y:
+                        tie += px * py
+                    elif x > y:
+                        hw += px * py
+    tie /= (4 * ngm); hw /= (4 * ngm)
     et = eh = en = 0
     for g in games:
         if not g["hl"] or not g["al"]:
