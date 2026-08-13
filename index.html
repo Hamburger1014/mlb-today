@@ -2719,7 +2719,7 @@ function renderGame(game, extras){
                     : ((odds && odds.homeP!=null) ? odds.homeP : null);
     if(fairHomeSharp!=null){
       fairHome=fairHomeSharp;
-      source=_so?`${_so.nBooks}-book consensus`:'DraftKings (de-vigged)';
+      source=_so?(_so.nBooks>=2?`${_so.nBooks}-book consensus`:'1 book only'):'DraftKings (de-vigged)';
     }
     if(fairHome!=null) fvPublish('mlb',{
       id:'mlb:'+game.gamePk, gameId:game.gamePk, idSrc:'statsapi',
@@ -5351,12 +5351,23 @@ async function load(){
         const sp=(g.spread&&g.spread.home&&g.spread.home.odds!=null&&g.spread.away&&g.spread.away.odds!=null)
           ? devigPower([mlToRawProb(g.spread.home.odds),mlToRawProb(g.spread.away.odds)]) : null;
         const kHome=null;   // Kalshi removed
+        // The field's own price, DraftKings excluded. Matching needs the FULL
+        // team name: the feed says "Connecticut Sun" while the row only carried
+        // "CON", so every lookup missed and crossScan saw zero games.
+        const _wso=sharpFairFor(g.homeName,g.awayName,g.gameDate,'wnba');
         if(dv) fvPublish('wnba',{
           id:'wnba:'+g.espnId, gameId:g.espnId, idSrc:'espn',
           league:'WNBA', home:g.homeAbbr, away:g.awayAbbr,
+          homeFull:g.homeName||null, awayFull:g.awayName||null,
           start:g.gameDate?Date.parse(g.gameDate):null,
-          fairHome:dv[0], source:'DraftKings (de-vigged)',
-          fairBook:dv[0], fairSharp:null,   // WNBA sharp feed arrives with the Odds API key
+          // Prefer the FIELD as fair value, not the book being judged. Showing
+          // DraftKings' own de-vigged price as "fair" makes the board's
+          // comparison circular; it falls back to the book only when the feed
+          // has nothing for this game.
+          fairHome:_wso?_wso.fairHome:dv[0],
+          source:_wso?(_wso.nBooks>=2?`${_wso.nBooks}-book consensus (de-vigged)`:'1 book only'):'DraftKings (de-vigged)',
+          fairBook:dv[0],
+          fairSharp:_wso?_wso.fairHome:null, sharpBooks:_wso?_wso.nBooks:null,
           bookHomeML:g.inlineOdds.homeML, bookAwayML:g.inlineOdds.awayML,
           spreadLine:sp?g.spread.home.line:null, spreadFairHome:sp?sp[0]:null,
         });
@@ -5429,8 +5440,20 @@ function renderBestBets(plays){
     ?`<div class="bb-foot">📊 Realized (1u each at the logged price, auto-graded from finals, pushes void): ${parts.join(' · ')}</div>`
     :'<div class="bb-foot">📊 Realized ROI appears here once flagged bets settle — auto-graded from final scores.</div>';
   const sub='<span style="font-weight:400;opacity:.6;font-size:.62rem">moneyline + spread vs DraftKings</span>';
+  // Price candidates, same model-free comparison the other three panels use:
+  // the field's de-vigged fair against the price DraftKings charges. This panel
+  // was model-only, so on days the model agreed with Vegas it had nothing to say
+  // even when the books disagreed with each other.
+  const scan=crossScan('wnba');
+  const crossHtml=scan.plays.length
+    ? '<div class="bb-sub">&#x1F4B1; Price plays <span style="font-weight:400;opacity:.6;font-size:.62rem">no model involved</span></div>'
+      + scan.plays.map(crossRowHtml).join('')
+    : '';
+  if(!plays.length && !scan.plays.length)
+    return `<div class="best-bets"><div class="bb-title">🎯 WNBA Best Bets ${sub}</div><div class="bb-empty">No +EV moneyline or spread plays today — the model agrees with Vegas, and no book price is far enough from the field to be worth taking. Sitting out is a position too.</div>${crossMissHtml(scan)}${roi}</div>`;
   if(!plays.length)
-    return `<div class="best-bets"><div class="bb-title">🎯 WNBA Best Bets ${sub}</div><div class="bb-empty">No +EV moneyline or spread plays today — the model agrees with Vegas. Sitting out is a position too.</div>${roi}</div>`;
+    return `<div class="best-bets"><div class="bb-title">🎯 WNBA Best Bets <span class="bb-count">${scan.plays.length}</span> ${sub}</div>${crossHtml}`
+      + `<div class="bb-foot"><b>These are price comparisons, not forecasts.</b> Fair value is the median of every other book with DraftKings deliberately EXCLUDED, and the price is the vigged number you actually pay. The model contributed nothing here — it agreed with Vegas today.</div>${roi}</div>`;
   let rows='';
   for(const b of plays){
     const tag=b.type==='SPREAD'?'<span class="bb-type bb-type-sp">SPREAD</span>':'<span class="bb-type bb-type-ml">ML</span>';
@@ -5454,7 +5477,7 @@ function renderBestBets(plays){
       :`<span class="bb-stake">${((b.stakeCapped!=null?b.stakeCapped:b.kelly)*100).toFixed(1)}% bankroll (¼-Kelly)</span>`;
     rows+=`<div class="bb-row"><span class="bb-mu">${b.matchup}</span>${tag}<span class="bb-pick">${b.label}</span><span class="bb-edge">+${(b.ev*100).toFixed(1)}% EV</span>${longshot}<span class="bb-ok">fair ${wPct(b.p)}${push}</span>${need}${cap}</div>`;
   }
-  return `<div class="best-bets"><div class="bb-title">🎯 WNBA Best Bets <span class="bb-count">${plays.length}</span> ${sub}</div>${rows}<div class="bb-foot"><b>Fair value is the model shrunk toward the de-vigged price</b> (weight ${(MARKET_EVIDENCE.WNBAML.w*100).toFixed(0)}% model on moneylines, ${(MARKET_EVIDENCE.WNBASP.w*100).toFixed(0)}% on spreads), measured on 214 backfilled 2026 games — not the raw model, which would let a price moving against a pick read as a bigger edge. Bars: ≥3% EV moneyline, ≥4% spread, ≥${(MIN_PROB_EDGE*100).toFixed(0)}pp probability edge. Flags are dropped when the price has moved ≥${(MOVE_VETO*100).toFixed(0)}pp against them since first sight. Stake = quarter-Kelly, capped at ${(MAX_STAKE_GAME*100).toFixed(0)}% per game and ${(MAX_STAKE_DAY*100).toFixed(0)}% per day because ML and spread on one game are a single position. <b>"need X or better"</b> is the worst price still +EV — that is the number to take to a soft book. <b>⚠ long odds</b>: EV is payout-amplified at +250 or longer and the model is unvalidated on heavy underdogs. This market is <b>unproven, not proven</b> (β_model p=0.29); watch CLV, not P&L. Not financial advice.</div>${roi}</div>`;
+  return `<div class="best-bets"><div class="bb-title">🎯 WNBA Best Bets <span class="bb-count">${plays.length+scan.plays.length}</span> ${sub}</div>${crossHtml}${scan.plays.length?'':crossMissHtml(scan)}${rows}<div class="bb-foot"><b>Fair value is the model shrunk toward the de-vigged price</b> (weight ${(MARKET_EVIDENCE.WNBAML.w*100).toFixed(0)}% model on moneylines, ${(MARKET_EVIDENCE.WNBASP.w*100).toFixed(0)}% on spreads), measured on 214 backfilled 2026 games — not the raw model, which would let a price moving against a pick read as a bigger edge. Bars: ≥3% EV moneyline, ≥4% spread, ≥${(MIN_PROB_EDGE*100).toFixed(0)}pp probability edge. Flags are dropped when the price has moved ≥${(MOVE_VETO*100).toFixed(0)}pp against them since first sight. Stake = quarter-Kelly, capped at ${(MAX_STAKE_GAME*100).toFixed(0)}% per game and ${(MAX_STAKE_DAY*100).toFixed(0)}% per day because ML and spread on one game are a single position. <b>"need X or better"</b> is the worst price still +EV — that is the number to take to a soft book. <b>⚠ long odds</b>: EV is payout-amplified at +250 or longer and the model is unvalidated on heavy underdogs. This market is <b>unproven, not proven</b> (β_model p=0.29); watch CLV, not P&L. Not financial advice.</div>${roi}</div>`;
 }
 
 return {load,toggleCard,exportLog};
