@@ -411,8 +411,11 @@
       font-size:.95rem;font-weight:600;padding:12px 20px;cursor:pointer}
     .nav-item:hover{background:var(--card2)}
     .nav-item.active{background:rgba(96,165,250,.15);color:#93c5fd;border-left:3px solid #60a5fa}
-    /* ── WNBA quarter grid + track bar (classes not shared with MLB) ── */
-    #wnba-track-bar{background:rgba(56,189,248,.05);border:1px solid var(--border);border-radius:10px;
+    /* ── Quarter grid + the shared prediction-log strip ──
+       The track bar used to be WNBA-only. It is the piece that made that view
+       readable — what the log has actually done, in one line, above the picks —
+       so MLB and NFL now use the same element rather than a private variant. */
+    #wnba-track-bar,.track-bar{background:rgba(56,189,248,.05);border:1px solid var(--border);border-radius:10px;
       padding:10px 16px;font-size:.78rem;color:var(--dim);display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:0 16px}
     .track-stat{display:flex;align-items:center;gap:5px}
     .track-stat b{color:var(--text)}
@@ -628,6 +631,7 @@
       <div class="status-step" id="s4">Checking injuries…</div>
     </div>
   </div>
+  <div id="mlb-track-bar" class="track-bar" style="display:none"></div>
   <div id="games-container" style="display:none;flex-direction:column;gap:12px"></div>
 </main>
 </div>
@@ -669,6 +673,14 @@
   <div class="view-intro">🏈 <b>NFL</b> · <b>Market only — no model, and that is deliberate.</b> Every prediction model on this site was measured against the closing price and none of them beat it, so this view shows the DraftKings line and its de-vigged fair value rather than a forecast. "Need" is the worst price still worth taking.</div>
   <main>
     <div id="nfl-status" role="status" aria-live="polite" style="text-align:center;padding:30px;color:var(--dim)">Loading NFL lines…</div>
+    <div id="nfl-track-bar" class="track-bar" style="display:none"></div>
+    <div class="section-hdr" id="nfl-games-hdr" style="display:none;padding:0 18px">
+      <span>Today's Games</span>
+      <div class="section-badges">
+        <span class="sc-badge" id="nfl-badge-count">0 games</span>
+      </div>
+    </div>
+    <div id="nfl-best-bets"></div>
     <div id="nfl-games" style="display:flex;flex-direction:column;gap:12px"></div>
   </main>
 </div>
@@ -883,6 +895,13 @@ function renderNFL(){
     st.style.display=''; st.textContent='No NFL lines posted yet — DraftKings has not opened this slate.'; box.innerHTML=''; return;
   }
   st.style.display='none';
+  const hdrEl=document.getElementById('nfl-games-hdr');
+  if(hdrEl){
+    hdrEl.style.display='flex';
+    const cnt=document.getElementById('nfl-badge-count');
+    if(cnt) cnt.textContent=rows.length+' game'+(rows.length!==1?'s':'');
+  }
+  renderNflTrackBar(); renderNflBestBets();
   const pct=p=>p==null?'—':(p*100).toFixed(0)+'%';
   let html='';
   for(const r of rows){
@@ -3113,7 +3132,7 @@ async function loadModelRecords(){
   // payload cached earlier today would render the old three-line block.
   const CK='mlb_model_records_v2';
   try{ const c=JSON.parse(localStorage.getItem(CK)||'null');
-    if(c && c.date===ystr && c.html){ el.innerHTML=c.html; el.style.display='block'; wireRecordToggle(); paintMlbClv(); if(c.calib) MODEL_CALIB=c.calib; return; } }catch(e){}
+    if(c && c.date===ystr && c.html){ el.innerHTML=c.html; el.style.display='block'; wireRecordToggle(); paintMlbClv(); renderMlbTrackBar(); if(c.calib) MODEL_CALIB=c.calib; return; } }catch(e){}
   try{
     const data=await mlbFetch(`/schedule?sportId=1&startDate=${SEASON}-03-01&endDate=${ystr}&gameType=R&hydrate=probablePitcher,linescore`);
     const games=[];
@@ -3185,7 +3204,7 @@ async function loadModelRecords(){
       `</div>`+
       `<div class="rec-detail" id="rec-detail" hidden>${(line0?line0+'<br>':'')+line2}</div>`;
     el.innerHTML=html; el.style.display='block';
-    wireRecordToggle(); paintMlbClv();
+    wireRecordToggle(); paintMlbClv(); renderMlbTrackBar();
     try{ localStorage.setItem(CK, JSON.stringify({date:ystr,html,calib:MODEL_CALIB})); }catch(e){}
   }catch(e){ el.style.display='none'; }
 }
@@ -3281,7 +3300,11 @@ async function init(){
     cap(fetchStarterKBB(mlbGames.flatMap(g=>[g.homeSpId,g.awaySpId])), 10000, undefined),
     cap(fetchWeather(mlbGames), 10000, undefined),
     cap(fetchBullpen(), 10000, undefined),
-    cap(loadMlbServerLog().then(paintMlbClv), 8000, undefined),
+    // Both of these paint from the server log, so both have to wait for it. The
+    // strip is also called from the record-render path, which fires FIRST and
+    // finds mlbServerLog still null — without this the bar stays hidden even
+    // though the log arrives a moment later with 53 entries in it.
+    cap(loadMlbServerLog().then(()=>{ paintMlbClv(); renderMlbTrackBar(); }), 8000, undefined),
   ]);
   stepDone('s4');
 
@@ -3319,12 +3342,11 @@ async function init(){
 
   const hdr=document.createElement('div');
   hdr.className='section-hdr';
-  hdr.innerHTML=`<span>${mlbGames.length} Games Today</span>
+  hdr.innerHTML=`<span>Today's Games</span>
     <div class="section-badges">
+      <span class="sc-badge">${mlbGames.length} game${mlbGames.length!==1?'s':''}</span>
       ${withOdds>0?`<span class="sc-badge">&#x1F4B0; ${withOdds} Vegas lines</span>`:''}
       ${withPitch>0?`<span class="sc-badge">&#x26BE; ${withPitch} pitchers</span>`:''}
-      ${withMarkets>0?`<span class="sc-badge">&#x26A1; ${withMarkets} Kalshi</span>`:''}
-      ${withMarkets>0?kalshiFreshnessBadge():''}
       ${!mlbStatsOk?`<span class="sc-badge" style="color:var(--orange)" title="Using ${statsSource} for team stats">&#x26A0; ${statsSource}</span>`:''}
     </div>`;
   container.appendChild(hdr);
@@ -3869,6 +3891,109 @@ function mlbClvHtml(){
     + `Raw CLV flatters any model that picks favourites, because prices drift that way on their own &mdash; only the difference is the model.</span></div>`;
 }
 
+// -- The shared prediction-log strip, per sport --------------------------------
+// Same element and same reading order as the WNBA bar, because that view is the
+// one that reads well: what the log has done, then what it cost, then whether it
+// beat the close. Each sport fills it from its own log; a sport with nothing to
+// report hides the strip rather than showing a row of zeroes.
+function renderMlbTrackBar(){
+  const el=document.getElementById('mlb-track-bar');
+  if(!el) return;
+  const a=mlbServerLog&&mlbServerLog.accuracy, c=mlbServerLog&&mlbServerLog.clv;
+  const r=betsROI('MLB');
+  const entries=(mlbServerLog&&Array.isArray(mlbServerLog.entries))?mlbServerLog.entries:[];
+  const pending=entries.filter(e=>!e.result&&!e.final).length;
+  if(!(a&&a.n)&&!(c&&c.n)&&!r.n&&!entries.length){ el.style.display='none'; return; }
+  el.style.display='flex';
+  let h='<span>&#x1F4D3; <b>Prediction log</b></span>';
+  if(a&&a.n)
+    h+='<span class="track-stat">Game picks: <b>'+a.hit+'/'+a.n+'</b> <span class="'
+      +(a.rate>=.5?'track-good':'track-bad')+'">'+Math.round(a.rate*100)+'%</span></span>';
+  if(r.n)
+    h+='<span class="track-stat">ML value bets: <b>'+r.w+'&ndash;'+r.l+'</b> &middot; ROI <b class="'
+      +(r.roi>=0?'track-good':'track-bad')+'">'+(r.roi>=0?'+':'')+(r.roi*100).toFixed(0)+'%</b></span>';
+  if(c&&c.n&&c.incrCents!=null){
+    // The INCREMENTAL number leads, never raw CLV. Prices drift toward the
+    // favourite on their own, so a model that mostly picks favourites collects
+    // that drift for free -- raw once read +0.52pp at z=3.09 while the model
+    // itself added +0.03pp. Raw stays visible as context, in the dim colour.
+    const g=c.incrCents>=0;
+    h+='<span class="track-stat" title="Model CLV minus the CLV of simply backing the market&apos;s own favourite">'
+      +'&#x1F4C8; CLV vs control: <b class="'+(g?'track-good':'track-bad')+'">'
+      +(g?'+':'')+c.incrCents.toFixed(2)+'&cent;</b>'
+      +(c.incrZ!=null?(' z='+(c.incrZ>=0?'+':'')+c.incrZ.toFixed(2)):'')
+      +' <span style="color:var(--dim2)">(raw '+(c.avgCents>=0?'+':'')+c.avgCents.toFixed(2)
+      +'&cent;, n='+c.n+')</span></span>';
+  }
+  if(pending) h+='<span class="track-stat" style="color:var(--dim2)">'+pending+' pending</span>';
+  if(entries.length)
+    h+='<span class="track-stat" style="color:var(--dim2)" title="Logged and graded by a scheduled job, independent of this browser">&#x1F310; '
+      +entries.length+' server-logged</span>';
+  h+='<button class="track-export" onclick="exportMlbLog()">Export JSON</button>';
+  el.innerHTML=h;
+}
+function exportMlbLog(){
+  const d=(mlbServerLog&&mlbServerLog.entries)?mlbServerLog.entries:[];
+  const blob=new Blob([JSON.stringify(d,null,2)],{type:'application/json'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob); a.download='mlb_prediction_log.json'; a.click();
+}
+function renderNflTrackBar(){
+  const el=document.getElementById('nfl-track-bar');
+  if(!el) return;
+  const bets=FV_BETS.filter(b=>b.league==='NFL');
+  const r=betsROI('NFL');
+  // FB_LINES is already the games map — loadFootballLines() unwraps `.games`.
+  const lines=(typeof FB_LINES!=='undefined'&&FB_LINES)?FB_LINES:null;
+  const logged=lines?Object.values(lines).filter(g=>g&&g.league==='NFL').length:0;
+  if(!bets.length&&!logged){ el.style.display='none'; return; }
+  el.style.display='flex';
+  let h='<span>&#x1F4D3; <b>Prediction log</b> <span style="color:var(--dim2)">market only &mdash; no model to grade</span></span>';
+  if(r.n)
+    h+='<span class="track-stat">Your bets: <b>'+r.w+'&ndash;'+r.l+'</b> &middot; ROI <b class="'
+      +(r.roi>=0?'track-good':'track-bad')+'">'+(r.roi>=0?'+':'')+(r.roi*100).toFixed(0)+'%</b></span>';
+  else if(bets.length)
+    h+='<span class="track-stat" style="color:var(--dim2)">'+bets.length+' bet'
+      +(bets.length!==1?'s':'')+' logged, none settled</span>';
+  // CLV in POINTS as well as cents: on a spread the line matters far more than
+  // the juice, because 15.4% of NFL games land on exactly 3.
+  const cl=[], pt=[];
+  for(const b of bets){ const c=fvBetClv(b); if(c){ (c.kind==='ml'?cl:pt).push(c); } }
+  if(cl.length){
+    const avg=cl.reduce(function(x,y){return x+y.pp;},0)/cl.length;
+    h+='<span class="track-stat">&#x1F4C8; ML CLV: <b class="'+(avg>=0?'track-good':'track-bad')
+      +'">'+(avg>=0?'+':'')+avg.toFixed(2)+'pp</b> <span style="color:var(--dim2)">(n='+cl.length+')</span></span>';
+  }
+  if(pt.length){
+    const avg=pt.reduce(function(x,y){return x+y.pts;},0)/pt.length;
+    h+='<span class="track-stat">&#x1F4C8; Line CLV: <b class="'+(avg>=0?'track-good':'track-bad')
+      +'">'+(avg>=0?'+':'')+avg.toFixed(2)+' pts</b> <span style="color:var(--dim2)">(n='+pt.length+')</span></span>';
+  }
+  if(logged)
+    h+='<span class="track-stat" style="color:var(--dim2)" title="Opening and closing DraftKings lines captured by a scheduled job">&#x1F310; '
+      +logged+' games line-logged</span>';
+  el.innerHTML=h;
+}
+// NFL "Best Bets" is the same component the other two views use, and it is
+// deliberately empty by construction: there is no NFL model, so nothing can flag
+// off one. It carries the measurement instead, which is the honest content.
+function renderNflBestBets(){
+  const el=document.getElementById('nfl-best-bets');
+  if(!el) return;
+  const sub='<span style="font-weight:400;opacity:.6;font-size:.62rem">market only &mdash; no model</span>';
+  el.innerHTML='<div class="best-bets"><div class="bb-title">&#x1F3AF; NFL Best Bets '+sub+'</div>'
+    +'<div class="bb-empty">Nothing flagged, and nothing can be &mdash; there is no NFL model here on purpose. '
+    +'Every model on this site was measured against the closing price and none beat it, so a fourth would be decoration.</div>'
+    +'<div class="bb-foot"><b>What was measured instead:</b> DraftKings&rsquo; spread NUMBER differs from the rest of '
+    +'the market on about <b>27%</b> of games, which is real dispersion &mdash; moneylines had none at all. But priced '
+    +'properly it pays nothing: a half point at 3 is worth ~4pp because <b>15.4% of NFL games land on exactly 3</b>, and '
+    +'DraftKings charges for it. On one live board it offered CHI &minus;2.5 at &minus;118 while books sitting on '
+    +'&minus;3 charged &minus;105. <b>Taking the best number AND price across all 8&ndash;9 books still cleared a 2pp '
+    +'bar on 0 of 57 games</b>, so the limit is not a single account &mdash; the number is priced away market-wide. '
+    +'Use the Fair Value Board&rsquo;s &ldquo;need&rdquo; column and bet only when a softer book is longer than it.</div>'
+    +betsROIHtml('NFL')+'</div>';
+}
+
 // Build the F5 signal strip from BEST_BETS, insert after the header.
 //
 // DEMOTED to paper-only (Aug 7 2026). The server-side forward log over 38 graded
@@ -3918,7 +4043,7 @@ function renderBestBets(container, hdr){
     }
     card.innerHTML=`<div class="bb-title">&#x1F3AF; MLB Best Bets <span class="bb-count">${plays.length}</span> ${sub}</div>`
       + rows
-      + `<div class="bb-foot"><b>Fair value is the model shrunk toward the de-vigged Kalshi price</b>, not the raw model — otherwise a market moving against a pick reads as a bigger edge. Stake is quarter-Kelly, capped per game and per day. <b>"need X or better"</b> is the worst price still +EV. Not financial advice.</div>`
+      + `<div class="bb-foot"><b>Fair value is the model shrunk toward the de-vigged DraftKings price</b>, not the raw model — otherwise a market moving against a pick reads as a bigger edge. Stake is quarter-Kelly, capped per game and per day. <b>"need X or better"</b> is the worst price still +EV. Not financial advice.</div>`
       + staleNote + roi;
   }
   hdr.insertAdjacentElement('afterend', card);
