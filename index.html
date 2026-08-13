@@ -1258,7 +1258,13 @@ function fvSettle(b,hs,as,hAb,aAb){
     if(hs===as) push=true;                        // rare, but do not guess
     else won = isHome ? hs>as : as>hs;
   }else if(b.market==='SPREAD'){
-    const m=(hs-as)+(b.line||0);                  // line is always the HOME line
+    // `line` is the BET SIDE's own line, so the margin must be measured from
+    // that side. This previously assumed every spread bet was on the home team
+    // and graded away-side bets BACKWARDS: an away favourite laying 6.5 that won
+    // by 10 was recorded as a loss. Nothing was mis-recorded in practice because
+    // the ledger was still empty when it was found.
+    if(b.sideIsHome==null) return false;          // unresolvable — leave pending
+    const m=(b.sideIsHome ? (hs-as) : (as-hs))+(b.line||0);
     if(Math.abs(m)<1e-9) push=true; else won=m>0;
   }else if(b.market==='TOTAL'){
     const t=hs+as;
@@ -5383,7 +5389,7 @@ async function load(){
       const sBet=bestSpreadBet(model,g);
       if(sBet&&!sBet.blocked&&sBet.ev>=0.04)
         plays.push({type:'SPREAD',matchup:mtc,side:sBet.side,ml:sBet.ml,ev:sBet.ev,p:sBet.p,pPush:sBet.pPush,mkt:sBet.mkt,
-          gameId:g.espnId,need:sBet.need,sideIsHome:true,line:sBet.line,
+          gameId:g.espnId,need:sBet.need,sideIsHome:sBet.key==='h',line:sBet.line,
           start:g.gameDate?Date.parse(g.gameDate):null,
           label:`${sBet.side} ${fmtLine(sBet.line)} (${fmtML(sBet.ml)})`,
           kelly:Math.min(0.05,sBet.ev/mlPayout(sBet.ml)/4)});
