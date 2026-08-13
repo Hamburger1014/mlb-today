@@ -23,6 +23,8 @@ ROOT = os.path.dirname(HERE)
 OUT  = os.path.join(ROOT, "data", "football_lines.json")
 BASE = "https://site.api.espn.com/apis/site/v2/sports/"
 LEAGUES = {"NFL": "football/nfl", "CFB": "football/college-football"}
+ODDS_PROXY = "https://mlb-kalshi.gabrielhiginio2005.workers.dev"
+ODDS_SPORT = {"NFL": "nfl", "CFB": "ncaaf"}
 
 
 def get(url, tries=3):
@@ -58,6 +60,92 @@ def scoreboard(path):
     return evs
 
 
+def norm_name(s):
+    return "".join(ch for ch in (s or "").lower() if ch.isalnum())
+
+
+def field_spreads(league):
+    """Every OTHER book's spread number for each game, plus DraftKings' own.
+
+    ESPN relays DraftKings alone, so the log has never recorded what the rest of
+    the market thinks the number is. That comparison is the whole football
+    question — roughly 9% of NFL games land on exactly 3, so holding +3 while
+    the field is at +2.5 is worth far more than any price edge on this board —
+    and it is NOT backfillable. Every week this does not run is a week gone.
+
+    DraftKings is kept OUT of the field median it gets judged against; including
+    a book in its own reference drags the gap toward zero.
+    """
+    out = {}
+    sport = ODDS_SPORT.get(league)
+    if not sport:
+        return out
+    try:
+        d = get(f"{ODDS_PROXY}/?odds={sport}&markets=spreads")
+    except Exception as e:
+        print(f"  ! field spreads ({sport}): {e}")
+        return out
+
+    saw_spreads = False
+    for g in d if isinstance(d, list) else []:
+        dk = None
+        others = []
+        for bk in g.get("bookmakers", []) or []:
+            mk = next((m for m in bk.get("markets", []) if m.get("key") == "spreads"), None)
+            if not mk:
+                continue
+            ho = next((o for o in mk.get("outcomes", []) if o.get("name") == g.get("home_team")), None)
+            if not ho or ho.get("point") is None:
+                continue
+            saw_spreads = True
+            if bk.get("key") == "draftkings":
+                dk = ho["point"]
+            else:
+                others.append(ho["point"])
+        if not others:
+            continue
+        others.sort()
+        n = len(others)
+        med = others[n // 2] if n % 2 else (others[n // 2 - 1] + others[n // 2]) / 2
+        key = norm_name(g.get("home_team")) + "|" + norm_name(g.get("away_team"))
+        out.setdefault(key, []).append({
+            "fieldSp": med, "fieldN": n, "dkSp": dk, "commence": g.get("commence_time"),
+        })
+
+    if not saw_spreads:
+        # The Worker ignores an unrecognised `markets` param and serves h2h, which
+        # parses fine and yields no points at all. Refuse to record silence as
+        # data: say so, and leave the field columns absent rather than empty.
+        print(f"  ! {sport}: no spreads in the feed — is the Worker deployed with "
+              f"the `markets` whitelist? (`npx wrangler deploy`)")
+    return out
+
+
+def pick_by_time(entries, start_iso):
+    """The occurrence closest in time to the game being logged.
+
+    Teams meet more than once and this feed runs weeks ahead, so a team-pair key
+    collides across dates. Anything more than 12h away is a DIFFERENT game, not
+    a line move, and must not be recorded as one.
+    """
+    if not entries:
+        return None
+    try:
+        want = datetime.fromisoformat((start_iso or "").replace("Z", "+00:00"))
+    except ValueError:
+        return entries[0] if len(entries) == 1 else None
+    best, bd = None, None
+    for e in entries:
+        try:
+            t = datetime.fromisoformat((e.get("commence") or "").replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        d = abs((t - want).total_seconds())
+        if bd is None or d < bd:
+            best, bd = e, d
+    return best if bd is not None and bd <= 12 * 3600 else None
+
+
 def snapshot(ev):
     c = (ev.get("competitions") or [{}])[0]
     o = (c.get("odds") or [None])[0]
@@ -91,13 +179,14 @@ def main():
             pass
     games = store.get("games", {})
 
-    seen = closed = added = 0
+    seen = closed = added = matched = 0
     for league, path in LEAGUES.items():
         try:
             evs = scoreboard(path)
         except Exception as e:
             print(f"  ! {league}: {e}")
             continue
+        fld = field_spreads(league)
         for ev in evs:
             c = (ev.get("competitions") or [{}])[0]
             state = ((c.get("status") or {}).get("type") or {}).get("name", "")
@@ -108,6 +197,18 @@ def main():
             snap = snapshot(ev)
             if not snap:
                 continue
+            # What the rest of the market has this game at, recorded alongside
+            # DraftKings' number so the two can be compared later. Matched on
+            # full team names (ESPN gives abbreviations to the store, but the
+            # odds feed only knows "Cincinnati Bengals").
+            hit = pick_by_time(fld.get(
+                norm_name((home.get("team") or {}).get("displayName")) + "|" +
+                norm_name((away.get("team") or {}).get("displayName"))), ev.get("date"))
+            if hit and hit.get("fieldSp") is not None:
+                snap["fieldSp"] = hit["fieldSp"]
+                snap["fieldN"] = hit["fieldN"]
+                snap["dkSpOdds"] = hit.get("dkSp")   # cross-check against ESPN's
+                matched += 1
             seen += 1
             gid = str(ev["id"])
             g = games.get(gid)
@@ -142,7 +243,7 @@ def main():
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     json.dump(store, open(OUT, "w"), separators=(",", ":"))
     print(f"{seen} games with odds ({added} new), closing refreshed on {closed}, "
-          f"{len(games)} retained -> {OUT}")
+          f"field spread on {matched}, {len(games)} retained -> {OUT}")
 
 
 if __name__ == "__main__":
