@@ -760,6 +760,19 @@ function toggleMenu(){
   if(open){ menu.removeAttribute('inert'); const first=menu.querySelector('.nav-item'); if(first) first.focus(); }
   else { menu.setAttribute('inert',''); if(burger) burger.focus(); }
 }
+// Pull the field's prices for one sport, then repaint whoever asked. Cached
+// ODDS_CACHE_MIN minutes in localStorage, and the Worker caches 300s on top, so
+// flipping between views does not spend a credit each time.
+function ensureSharpFor(sport, after){
+  const done=()=>{ if(after) after(); };
+  const key=SHARP_SPORT_KEY[sport];
+  // ALWAYS run the callback, including on failure. The callback is what renders
+  // the view; swallowing it on a bad odds request would leave the page blank
+  // because a price feed was down.
+  if(!key) return done();
+  if(SHARP_BY_SPORT[key]) return done();
+  fetchSharpOdds(key).then(done).catch(done);
+}
 function switchView(v){
   ACTIVE_VIEW=v;
   document.getElementById('mlb-view').style.display  = v==='mlb'?'':'none';
@@ -774,7 +787,14 @@ function switchView(v){
   document.getElementById('hdr-title').textContent   = NAME[v]||'MLB Today';
   document.querySelectorAll('.nav-item').forEach(b=>b.classList.toggle('active',b.dataset.view===v));
   toggleMenu();
-  if(v==='wnba'){ stopLiveScorePolling(); if(!wnbaLoaded){ wnbaLoaded=true; WNBA.load(); } }
+  if(v==='wnba'){
+    stopLiveScorePolling();
+    // WNBA renders inside load(); there is no separate render entry point, so
+    // fetch the field's prices FIRST and let the single render use them, rather
+    // than painting twice.
+    if(!wnbaLoaded){ wnbaLoaded=true; ensureSharpFor('wnba', ()=>WNBA.load()); }
+    else ensureSharpFor('wnba');
+  }
   else if(v==='card'){
     stopLiveScorePolling();
     // The card spans every sport, so it needs all of them primed. WNBA loads
@@ -794,6 +814,7 @@ function switchView(v){
     Promise.all([fvFetchFootball().catch(()=>{}), loadFootballLines().catch(()=>{})])
       .then(()=>{renderNFL();renderCFB();}).catch(()=>{renderNFL();renderCFB();});
     loadFootballModels().then(()=>{renderNFL();renderCFB();}).catch(()=>{});
+    ensureSharpFor(v, ()=>{ renderNFL(); renderCFB(); });
     renderNFL(); renderCFB();
   }
   else if(v==='fv'){
@@ -890,6 +911,10 @@ async function fvFetchFootball(force){
           book:o.provider?.name||'Book',
           homeName:home.team?.shortDisplayName||home.team?.abbreviation,
           awayName:away.team?.shortDisplayName||away.team?.abbreviation,
+          // FULL names too. The odds feed says "North Carolina Tar Heels" while
+          // shortDisplayName is "Tar Heels", so matching on the short one finds
+          // nothing at all — silently, with no error.
+          homeFull:home.team?.displayName||null, awayFull:away.team?.displayName||null,
           homeLogo:home.team?.logo||null, awayLogo:away.team?.logo||null,
           homeRec:(home.records||[])[0]?.summary||null, awayRec:(away.records||[])[0]?.summary||null,
           mlHome:mlH, mlAway:mlA,
@@ -2662,7 +2687,7 @@ function renderGame(game, extras){
 
   // ── VALUE: YOUR MODEL's probability vs Kalshi price ─────────────
   //   The model is the edge-finder; sharp books are shown only as a check.
-  const _so = sharpFairFor(homeName, awayName, gameTime);
+  const _so = sharpFairFor(homeName, awayName, gameTime, 'mlb');
   // Prefer the 9-book Odds API consensus; if no Odds key is set, fall back to the
   // DraftKings line ESPN already carries (1 book) so the books-agree check is live
   // either way. Auto-upgrades to the multi-book consensus once a key is configured.
@@ -3091,14 +3116,31 @@ function median(a){ if(!a.length) return null; const s=[...a].sort((x,y)=>x-y),m
   return s.length%2?s[m]:(s[m-1]+s[m])/2; }
 
 let SHARP_STATUS='nokey';   // nokey | live | empty | error
-let sharpOdds = {};   // key "home|away" -> [{fairHome, nBooks, commence}, ...]
+// One map PER SPORT. This used to be a single object, which meant the second
+// sport to fetch silently overwrote the first — and since only MLB ever fetched,
+// WNBA, NFL and CFB had no independent price reference at all. They were
+// comparing DraftKings against itself, which is the same circularity that made
+// the Kalshi-era board useless.
+const SHARP_BY_SPORT = {};   // sport -> { "home|away": [{fairHome,nBooks,commence}, ...] }
+// The Odds API's key for each of our view names.
+const SHARP_SPORT_KEY = {mlb:'mlb', wnba:'wnba', nfl:'nfl', cfb:'ncaaf'};
 
 // Pick the sharp fair value for a specific game (closest start time; guards
 // against matching the wrong day when a team plays a multi-game series).
-function sharpFairFor(homeName, awayName, gameTimeISO){
-  const arr = sharpOdds[normName(homeName)+'|'+normName(awayName)];
+function sharpFairFor(homeName, awayName, gameTimeISO, sport){
+  // Views are named cfb/nfl/wnba/mlb; the feed is keyed by The Odds API's name
+  // (cfb -> ncaaf). Looking up the VIEW name found nothing and every lookup
+  // returned null with no error to show for it.
+  const key = SHARP_SPORT_KEY[sport||'mlb'] || sport || 'mlb';
+  const map = SHARP_BY_SPORT[key] || {};
+  const arr = map[normName(homeName)+'|'+normName(awayName)];
   if(!arr || !arr.length) return null;
-  const t = Date.parse(gameTimeISO) || Date.now();
+  // Accept a timestamp OR an ISO string. FV rows store `start` as a NUMBER, and
+  // Date.parse(number) is NaN, which fell back to "now" — so every game more
+  // than 18h out was rejected as a mismatch. That silently zeroed all 98 CFB
+  // rows while MLB kept working, because MLB passes an ISO string.
+  const t = (typeof gameTimeISO==='number' && isFinite(gameTimeISO))
+    ? gameTimeISO : (Date.parse(gameTimeISO) || Date.now());
   let best=null, bd=Infinity;
   for(const e of arr){ const d=Math.abs(e.commence - t); if(d<bd){ bd=d; best=e; } }
   return bd <= 18*3600000 ? best : null;   // must be within 18h to count
@@ -3107,9 +3149,9 @@ function sharpFairFor(homeName, awayName, gameTimeISO){
 // Devig all books for every game and cache the consensus fair prob.
 async function fetchSharpOdds(sport='mlb'){
   try{
-    const ck='sharp_odds_'+sport+'_v3';
+    const ck='sharp_odds_'+sport+'_v4';
     const cached=JSON.parse(localStorage.getItem(ck)||'null');
-    if(cached && (Date.now()-cached.ts) < ODDS_CACHE_MIN*60000){ sharpOdds=cached.map; return; }
+    if(cached && (Date.now()-cached.ts) < ODDS_CACHE_MIN*60000){ SHARP_BY_SPORT[sport]=cached.map; return; }
   }catch(e){}
   try{
     const r=await fetch(`${ODDS_PROXY}?odds=${encodeURIComponent(sport)}`);
@@ -3155,9 +3197,9 @@ async function fetchSharpOdds(sport='mlb'){
         commence: Date.parse(g.commence_time),
       });
     }
-    sharpOdds=map;
+    SHARP_BY_SPORT[sport]=map;
     SHARP_STATUS = Object.keys(map).length ? 'live' : 'empty';
-    try{ localStorage.setItem('sharp_odds_'+sport+'_v3',JSON.stringify({ts:Date.now(),map})); }catch(e){}
+    try{ localStorage.setItem('sharp_odds_'+sport+'_v4',JSON.stringify({ts:Date.now(),map})); }catch(e){}
   }catch(e){ SHARP_STATUS='error'; console.warn('sharp odds fetch failed:',e.message); }
 }
 
@@ -4139,6 +4181,38 @@ function renderFbTrackBar(LG){
       +logged+' games line-logged</span>';
   el.innerHTML=h;
 }
+// Model-free candidates: the field's de-vigged fair price against the price
+// DraftKings is actually charging. No forecast is involved, so this is right on
+// days every model is wrong — and it is the only edge that survived contact with
+// the measurements. The bar matches the card's: a raw gap must clear
+// CARD_MIN_EDGE after CARD_CROSS_SHRINK, i.e. about 2.35pp.
+function fbCrossPlays(LG){
+  const out=[];
+  const bar=CARD_MIN_EDGE/CARD_CROSS_SHRINK;
+  for(const r of (FV_ROWS[LG]||[])){
+    const so=sharpFairFor(r.homeFull||r.homeName, r.awayFull||r.awayName, r.start, LG);
+    if(!so || so.fairHome==null) continue;
+    // A "field median" built from one or two books is not a consensus, it is one
+    // book's opinion wearing a consensus label. Thin references were showing up
+    // on small-conference games with a single book posting.
+    if(!(so.nBooks>=3)) continue;
+    // Price is the VIGGED number you actually pay. On a sportsbook the vig IS
+    // the cost, so there is no separate fee to subtract.
+    const sides=[
+      {side:r.home, name:r.homeName||r.home, fair:so.fairHome, ml:r.mlHome},
+      {side:r.away, name:r.awayName||r.away, fair:1-so.fairHome, ml:r.mlAway},
+    ];
+    for(const x of sides){
+      if(x.ml==null) continue;
+      const paid=mlToRawProb(x.ml);
+      const raw=x.fair-paid;
+      if(raw>=bar) out.push({...x, raw, edge:raw*CARD_CROSS_SHRINK, books:so.nBooks,
+                             matchup:(r.away||'')+'@'+(r.home||'')});
+    }
+  }
+  out.sort((a,b)=>b.edge-a.edge);
+  return out;
+}
 // NFL "Best Bets" is the same component the other two views use, and it is
 // deliberately empty by construction: there is no NFL model, so nothing can flag
 // off one. It carries the measurement instead, which is the honest content.
@@ -4153,6 +4227,29 @@ function renderFbBestBets(LG){
   const _m=FB_MODELS[LG]&&FB_MODELS[LG]();
   const _wf=(_m&&_m.walkForward&&_m.walkForward.rate!=null)
     ? (_m.walkForward.rate*100).toFixed(1)+'% straight up walk-forward' : 'not yet measured';
+  const plays=fbCrossPlays(LG);
+  if(plays.length){
+    let rows='';
+    for(const p of plays){
+      rows+='<div class="bb-row"><span class="bb-mu">'+esc(p.matchup)+'</span>'
+        +'<span class="bb-type bb-type-ml">ML</span>'
+        +'<span class="bb-pick">'+esc(p.name)+' '+fvAmer(p.ml)+'</span>'
+        +'<span class="bb-edge">+'+(p.edge*100).toFixed(1)+'pp</span>'
+        +'<span class="bb-ok">fair '+(p.fair*100).toFixed(0)+'%</span>'
+        +'<span class="bb-need">need '+fvAmer(breakEvenAmerican(p.fair))+' or better</span>'
+        +'<span class="bb-stake">'+p.books+' books</span></div>';
+    }
+    el.innerHTML='<div class="best-bets"><div class="bb-title">&#x1F3AF; '+UP+' Best Bets '
+      +'<span class="bb-count">'+plays.length+'</span>'
+      +'<span style="font-weight:400;opacity:.6;font-size:.62rem">price only &mdash; no model involved</span></div>'
+      +rows
+      +'<div class="bb-foot"><b>These are price comparisons, not forecasts.</b> Fair value is the median of every '
+      +'other book with DraftKings deliberately EXCLUDED &mdash; including a book in the consensus it is judged '
+      +'against drags the gap toward zero. The price shown is the vigged number you actually pay. The model on this '
+      +'view contributed nothing here: it is registered unproven and weighted 0.</div>'
+      +betsROIHtml(UP)+'</div>';
+    return;
+  }
   el.innerHTML='<div class="best-bets"><div class="bb-title">&#x1F3AF; '+UP+' Best Bets '+sub+'</div>'
     +'<div class="bb-empty">Nothing flagged. There is a model on this view now &mdash; '+_wf+' &mdash; '
     +'but it is registered <b>unproven</b> (weight 0) until it has been measured against the closing price, and until then it '
