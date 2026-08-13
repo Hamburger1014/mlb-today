@@ -903,6 +903,14 @@ function renderNFL(){
   }
   renderNflTrackBar(); renderNflBestBets();
   const pct=p=>p==null?'—':(p*100).toFixed(0)+'%';
+  const nflCtrls=`<div class="game-controls" id="nfl-controls">
+    <span class="gc-lbl">Sort</span>
+    <select class="gc-sel gc-sort">
+      <option value="time">Start time</option>
+      <option value="value">Gap vs field</option>
+      <option value="edge">Line lopsidedness</option>
+    </select>
+  </div>`;
   let html='';
   for(const r of rows){
     const d=r.start?new Date(r.start):null;
@@ -920,8 +928,17 @@ function renderNFL(){
            <div class="src-detail">${detail||''}</div>
          </div>`;
     const need=p=>p==null?'—':fvAmer(breakEvenAmerican(p));
+    // Sort keys. There is no NFL model, so "value" is the gap between the
+    // field's fair price and DraftKings' raw one, and "edge" is how lopsided the
+    // fair price is — both honest orderings that need no forecast.
+    // Every row here is pregame: the fetcher above drops anything that is not
+    // STATUS_SCHEDULED, so there is no live/final state to filter on.
+    const _raw=(r.mlHome!=null)?mlToRawProb(r.mlHome):null;
+    const _val=(r.fairHome!=null&&_raw!=null)?Math.abs(r.fairHome-_raw):-1;
+    const _edg=(r.fairHome!=null)?Math.abs(r.fairHome-0.5):0;
     html+=`
-    <div class="game-card gc-pre">
+    <div class="game-card gc-pre" data-status="pre" data-time="${r.start||0}"
+         data-value="${_val.toFixed(4)}" data-edge="${_edg.toFixed(4)}">
       <div class="card-header">
         <div class="team-side away">
           <div class="team-logo-name">${r.awayLogo?`<img src="${esc(r.awayLogo)}" alt="" width="26" height="26" loading="lazy">`:''}<span>${esc(r.awayName||r.away)}</span></div>
@@ -963,7 +980,9 @@ function renderNFL(){
       </div>
     </div>`;
   }
-  box.innerHTML=fbClvHtml('NFL')+html;
+  box.innerHTML=fbClvHtml('NFL')+nflCtrls+html;
+  const _nc=document.getElementById('nfl-controls');
+  if(_nc) wireGameControls(box, _nc);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -3356,7 +3375,7 @@ async function init(){
   ctrls.className='game-controls';
   ctrls.innerHTML=`
     <span class="gc-lbl">Sort</span>
-    <select id="gc-sort" class="gc-sel">
+    <select class="gc-sel gc-sort">
       <option value="time">Start time</option>
       <option value="value">Model value</option>
       <option value="edge">Model confidence</option>
@@ -3457,13 +3476,18 @@ function patchCardScore(card, g){
 
 // Sort/filter the rendered game cards in place (no re-fetch).
 function wireGameControls(container, ctrls){
-  const sortSel=ctrls.querySelector('#gc-sort');
+  const sortSel=ctrls.querySelector('.gc-sort');
   const togs=[...ctrls.querySelectorAll('.gc-tog')];
   function apply(){
-    const show=new Set(togs.filter(t=>t.classList.contains('active')).map(t=>t.dataset.f));
+    // No Show toggles means no status filter. NFL has none, because its fetcher
+    // only ever publishes STATUS_SCHEDULED games — and an empty toggle set
+    // matches no status at all, which blanked that entire view.
+    const show=togs.length
+      ? new Set(togs.filter(t=>t.classList.contains('active')).map(t=>t.dataset.f))
+      : null;
     const cards=[...container.querySelectorAll('.game-card')];
     // filter
-    cards.forEach(c=> c.style.display = show.has(c.dataset.status)?'':'none');
+    cards.forEach(c=> c.style.display = (!show || show.has(c.dataset.status))?'':'none');
     // sort visible
     const mode=sortSel.value;
     const vis=cards.filter(c=>c.style.display!=='none');
@@ -4922,7 +4946,16 @@ function renderGame(g,model,kGame,kQtrs){
     </div>
   </div>`;
 
-  return `<div class="game-card" id="wnbacard-${g.espnId}">
+  // Sort keys, matching the MLB card's contract. `value` is the flagged bet's
+  // EV where there is one and -1 otherwise, so games with a play sort above
+  // games without; a finished or in-progress game has nothing left to bet and
+  // is pushed to the bottom rather than ranked on a stale number.
+  const _st=g.isFinal?'final':g.isLive?'live':'pre';
+  const _val=(vBet&&vBet.ev!=null&&!g.isFinal&&!g.isLive)?vBet.ev:-1;
+  const _edg=(model&&model.pHomeGame!=null)?Math.abs(model.pHomeGame-0.5):0;
+  return `<div class="game-card" id="wnbacard-${g.espnId}" data-status="${_st}"
+    data-time="${g.gameDate?Date.parse(g.gameDate)||0:0}"
+    data-value="${_val.toFixed(4)}" data-edge="${_edg.toFixed(4)}">
     <div class="card-header" onclick="WNBA.toggleCard('${g.espnId}')">
       <div class="team-side away">
         <div class="team-logo-name">
@@ -5039,7 +5072,22 @@ async function load(){
     label:p.label, ml:p.ml, p:p.p, mkt:p.mkt, start:p.start||null,
     sideIsHome:p.sideIsHome, line:p.line??null,
   }));
-  document.getElementById('wnba-games').innerHTML=renderBestBets(plays)+html;
+  const wnbaCtrls=`<div class="game-controls" id="wnba-controls">
+    <span class="gc-lbl">Sort</span>
+    <select class="gc-sel gc-sort">
+      <option value="time">Start time</option>
+      <option value="value">Model value</option>
+      <option value="edge">Model confidence</option>
+    </select>
+    <span class="gc-lbl">Show</span>
+    <button class="gc-tog active" data-f="pre">Pregame</button>
+    <button class="gc-tog active" data-f="live">Live</button>
+    <button class="gc-tog" data-f="final">Final</button>
+  </div>`;
+  const _wbox=document.getElementById('wnba-games');
+  _wbox.innerHTML=renderBestBets(plays)+wnbaCtrls+html;
+  const _wc=document.getElementById('wnba-controls');
+  if(_wc) wireGameControls(_wbox, _wc);
   renderTrackBar();
   scheduleLiveRefresh(games);
 }
