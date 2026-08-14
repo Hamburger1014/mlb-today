@@ -1,3 +1,9 @@
 name = "mlb-kalshi"
 main = "worker.js"
 compatibility_date = "2024-11-01"
+
+# Cloudflare actually runs these. Same windows the GitHub schedule asks for —
+# roughly 10am ET through 12:50am ET, which covers every tip and lets late
+# West-Coast games be graded the same night.
+[triggers]
+crons = ["*/10 14-23 * * *", "*/10 0-5 * * *"]

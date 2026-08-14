@@ -128,12 +128,71 @@ async function cachedProxy(keyStr, upstreamUrl, ctx, freshS, extraHeaders) {
   return withCors(new Response(body, { status, headers: { 'Content-Type': 'application/json' } }), 'error');
 }
 
+// ── SCHEDULED: kick the GitHub Actions logger ────────────────────────────────
+//
+// WHY THIS EXISTS. The logging job is scheduled on GitHub cron and GitHub does
+// not run it. Measured 2026-08-14: the workflow asks for every 10 minutes and
+// fired ZERO times in 52 minutes; over 2026-08-05..10 it fired zero times in six
+// days while the WNBA played on four of them. Nothing failed — the runs simply
+// never started, so every step was green and the log just stopped growing.
+//
+// Cloudflare cron triggers actually fire. This handler does nothing except ask
+// GitHub to run the workflow, via workflow_dispatch, which is an explicit API
+// call rather than best-effort scheduling.
+//
+// WHAT THIS DELIBERATELY DOES NOT DO: port the logger. The model lives in
+// index.html, wnba_today.html and scripts/wnba_log.py, and this repo carries
+// three parity verifiers because those copies drift. A fourth copy in JavaScript
+// would be a new source of exactly the bug the verifiers exist to catch. The
+// problem measured was delivery, not logic, so only delivery moved.
+const GH_OWNER = 'Hamburger1014';
+const GH_REPO  = 'mlb-today';
+const GH_FILE  = 'kalshi-snapshot.yml';
+
+async function dispatchWorkflow(env) {
+  // No token means this is not configured yet. Say so and stop — a cron that
+  // throws every ten minutes is noise, not a signal.
+  const tok = env && env.GH_DISPATCH_TOKEN;
+  if (!tok) return { ok: false, why: 'GH_DISPATCH_TOKEN not set' };
+  const url = `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/actions/workflows/${GH_FILE}/dispatches`;
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${tok}`,
+      'Accept': 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      // GitHub rejects API calls with no User-Agent.
+      'User-Agent': 'mlb-today-cron',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ ref: 'main' }),
+  });
+  // 204 No Content is success for this endpoint.
+  return { ok: r.status === 204, status: r.status, why: r.status === 204 ? 'dispatched' : await r.text() };
+}
+
 export default {
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(dispatchWorkflow(env).then(res => {
+      console.log('cron dispatch', JSON.stringify(res));
+    }));
+  },
+
   async fetch(request, env, ctx) {
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
     if (request.method !== 'GET') return new Response('GET only', { status: 405, headers: CORS });
 
     const url = new URL(request.url);
+
+    // Manual trigger for the same dispatch the cron performs, so the wiring can
+    // be verified without waiting up to ten minutes for a scheduled firing.
+    if (url.searchParams.get('cron') === 'run') {
+      const res = await dispatchWorkflow(env);
+      return new Response(JSON.stringify(res), {
+        status: res.ok ? 200 : 503,
+        headers: { ...CORS, 'content-type': 'application/json' },
+      });
+    }
 
     // ── Odds API proxy (key stays server-side) ──
     const oddsSport = url.searchParams.get('odds');

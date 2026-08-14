@@ -18,6 +18,13 @@ on:
     # Cost is ~90 bot commits/day instead of ~30, which is fine for a data repo.
     - cron: '*/10 14-23 * * *'
     - cron: '*/10 0-5 * * *'
+  # These two are now a FALLBACK. GitHub does not honour them: measured
+  # 2026-08-14, zero of ~5 expected runs fired in 52 minutes, and zero fired
+  # across the six days 2026-08-05..10 while games were played on four of them.
+  # The Cloudflare Worker (worker/worker.js) holds the same schedule as a cron
+  # trigger and dispatches this workflow explicitly, which does fire. Both paths
+  # are kept because the logger skips games it has already recorded, so a
+  # duplicate run costs nothing.
   workflow_dispatch:
   push:
     paths:

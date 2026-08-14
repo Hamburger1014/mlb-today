@@ -39,3 +39,43 @@ with a 200. That parses cleanly and yields no points, so a caller cannot tell th
 difference from a status code. `scripts/football_log.py` now checks that spreads
 were actually present rather than trusting the response. The Worker itself now
 400s an unlisted market instead of silently substituting.
+
+## Cron: it also runs the logger
+
+The prediction logger lives in GitHub Actions and GitHub does not reliably run
+scheduled workflows. Measured 2026-08-14: the workflow asks for every 10 minutes
+and fired **zero times in 52 minutes**; across 2026-08-05..10 it fired zero times
+in six days while the WNBA played on four of them. Nothing ever failed — runs
+simply never started, so every step stayed green while the log stopped growing.
+
+Cloudflare cron triggers do fire. This Worker's `scheduled()` handler does one
+thing: ask GitHub to run the workflow via `workflow_dispatch`, which is an
+explicit API call rather than best-effort scheduling.
+
+    [triggers]
+    crons = ["*/10 14-23 * * *", "*/10 0-5 * * *"]
+
+The GitHub schedule is deliberately left in place as a second path. The logger
+skips games it has already recorded, so a duplicate run is a no-op.
+
+**It does NOT port the logger.** The model exists in `index.html`,
+`wnba_today.html` and `scripts/wnba_log.py`, and the repo carries three parity
+verifiers because those copies drift. A fourth copy in JavaScript would be a new
+instance of the exact bug those verifiers exist to catch. Only delivery moved,
+because delivery is what was measured broken.
+
+### The token (set once, by hand)
+
+Needs a fine-grained personal access token scoped to this one repository with
+**Actions: Read and write**, nothing else. Create it at
+GitHub → Settings → Developer settings → Personal access tokens → Fine-grained.
+
+    npx wrangler secret put GH_DISPATCH_TOKEN
+
+Until it is set the handler no-ops and says so rather than throwing every ten
+minutes:
+
+    GET /?cron=run  ->  503 {"ok":false,"why":"GH_DISPATCH_TOKEN not set"}
+
+Once set, that same URL returns `{"ok":true,...}` and is the way to test the
+wiring without waiting for a scheduled firing.
