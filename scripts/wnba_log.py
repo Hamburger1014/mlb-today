@@ -122,9 +122,43 @@ def parse_event(ev):
     }
 
 
+# Which host actually answered, recorded so the next failure names itself.
+SB_HOST_USED = None
+
+
 def scoreboard(ymd=None):
-    url = f"{ESPN}/scoreboard" + (f"?dates={ymd}" if ymd else "")
-    return [g for g in (parse_event(e) for e in get(url).get("events", [])) if g]
+    """The slate, from whichever ESPN host will answer.
+
+    site.api.espn.com serves this fine from a desktop and returns HTTP 403 to the
+    GitHub runner — proven by the lastRun probe on 2026-08-14T16:05:40, which
+    recorded 403 for both dated queries AND the undated fallback while
+    mlb_log.py's call to the SAME host succeeded later in the same job. So it is
+    neither a blanket block nor the `dates` parameter, and rather than keep
+    guessing at the cause these are simply tried in order. Whichever answers is
+    recorded, so one scheduled run identifies the working host.
+
+    cdn.espn.com returns the same event objects nested under content.sbData, so
+    parse_event() is unchanged.
+    """
+    global SB_HOST_USED
+    q = f"?dates={ymd}" if ymd else ""
+    attempts = [
+        ("site.api", f"{ESPN}/scoreboard{q}"),
+        ("site.web.api", f"https://site.web.api.espn.com/apis/site/v2/sports/basketball/wnba/scoreboard{q}"),
+        ("cdn.core", f"https://cdn.espn.com/core/wnba/scoreboard?xhr=1" + (f"&dates={ymd}" if ymd else "")),
+    ]
+    last = None
+    for name, url in attempts:
+        try:
+            d = get(url)
+            evs = d.get("events")
+            if evs is None:                      # cdn nests it
+                evs = (((d.get("content") or {}).get("sbData") or {}).get("events")) or []
+            SB_HOST_USED = name
+            return [g for g in (parse_event(e) for e in evs) if g]
+        except Exception as ex:
+            last = f"{name}: {type(ex).__name__} {str(ex)[:60]}"
+    raise RuntimeError(last or "no scoreboard host answered")
 
 
 def load_ratings():
@@ -415,7 +449,7 @@ def main():
     diag = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "window": f"{us_today}/{us_tomorrow}",
             "scoreboardGames": len(today), "pregameGames": len(pregame),
-            "probe": probe,
+            "probe": probe, "sbHost": SB_HOST_USED,
             "skippedNoRatings": 0, "ratingsTeams": 0}
     n_before = len(by_id)
 
