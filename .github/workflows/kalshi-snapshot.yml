@@ -35,6 +35,8 @@ on:
       - 'scripts/card_log.py'
       - 'scripts/verify_card_parity.py'
       - 'scripts/verify_mlb_parity.py'
+      - 'scripts/verify_walters_parity.py'
+      - 'scripts/walters.py'
       - '.github/workflows/kalshi-snapshot.yml'
 
 permissions:
@@ -54,6 +56,9 @@ jobs:
       # shows — so fail loudly rather than record predictions nobody made.
       - name: Verify WNBA model parity (page vs logger)
         run: python scripts/verify_wnba_parity.py
+      - name: Verify Walters spread-number parity (page vs walters.py)
+        run: python scripts/verify_walters_parity.py
+
       - name: Verify MLB model parity (page vs logger)
         run: python scripts/verify_mlb_parity.py
       - name: Log & grade WNBA predictions

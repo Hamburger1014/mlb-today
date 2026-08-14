@@ -810,6 +810,10 @@ function switchView(v){
     const jobs=[fvFetchFootball().catch(()=>{})];
     for(const sp of ['mlb','wnba','nfl','cfb'])
       jobs.push(new Promise(res=>ensureSharpFor(sp,res)));
+    // Spread numbers too — football's edge is the number, and the card is the
+    // page that is supposed to rank it against everything else.
+    for(const sp of ['nfl','ncaaf'])
+      jobs.push(fetchSharpSpreads(sp).catch(()=>{}));
     if(!wnbaLoaded){ wnbaLoaded=true; jobs.push(Promise.resolve(WNBA.load()).catch(()=>{})); }
     Promise.all(jobs).then(renderCard).catch(()=>renderCard());
     loadCardServerLog().then(renderCard).catch(()=>{});
@@ -824,6 +828,8 @@ function switchView(v){
       .then(()=>{renderNFL();renderCFB();}).catch(()=>{renderNFL();renderCFB();});
     loadFootballModels().then(()=>{renderNFL();renderCFB();}).catch(()=>{});
     ensureSharpFor(v, ()=>{ renderNFL(); renderCFB(); });
+    for(const sp of ['nfl','ncaaf'])
+      if(!SHARP_SPREADS[sp]) fetchSharpSpreads(sp).then(()=>{ renderNFL(); renderCFB(); }).catch(()=>{});
     renderNFL(); renderCFB();
   }
   else if(v==='fv'){
@@ -4235,6 +4241,157 @@ function fbCrossPlays(LG){
   const res=crossScan(LG);
   return res.plays;
 }
+// ── SPREAD NUMBERS (the Walters half-point valuation) ────────────────────────
+//
+// A price comparison cannot see the thing that actually pays in football. Getting
+// +3 where the field is +2.5 is worth roughly 4pp because 15.39% of NFL games are
+// decided by exactly 3, while the same half point at 5 or 8 is worth about 1.2pp.
+// crossScan() compares moneyline PRICES and is blind to all of it.
+//
+// This is a port of scripts/walters.py. A second copy of a model is exactly what
+// this repo keeps building verifiers to catch, so scripts/verify_walters_parity.py
+// runs both implementations over the same cases in node and Python and fails on
+// any disagreement past 1e-6. Change one, change the other, or the gate stops the
+// commit.
+const W_KEY_MASS = {3:0.1539, 7:0.0874, 6:0.0584, 10:0.0581, 4:0.0518, 14:0.0492};
+const W_SIGMA    = {nfl:13.2, cfb:16.0};
+const _wBumpCache = {};
+
+function _wRawPmf(mu, sigma, b){
+  const out={};
+  for(let m=-70;m<=70;m++){
+    const d=Math.exp(-0.5*Math.pow((m-mu)/sigma,2))/(sigma*Math.sqrt(2*Math.PI));
+    out[m]=d*(b[Math.abs(m)]||1);
+  }
+  return out;
+}
+// Solved by fixed point, not one division: adding weight at the key numbers
+// changes the normalising total and drags them all back under target.
+function _wBumps(sigma){
+  if(_wBumpCache[sigma]) return _wBumpCache[sigma];
+  const b={}; for(const k in W_KEY_MASS) b[k]=1;
+  for(let it=0; it<200; it++){
+    const pmf=_wRawPmf(0,sigma,b);
+    let tot=0; for(const m in pmf) tot+=pmf[m];
+    let worst=0;
+    for(const k in W_KEY_MASS){
+      const got=(pmf[k]+pmf[-k])/tot;
+      worst=Math.max(worst,Math.abs(got-W_KEY_MASS[k]));
+      b[k]*=W_KEY_MASS[k]/got;
+    }
+    if(worst<1e-9) break;
+  }
+  _wBumpCache[sigma]=b;
+  return b;
+}
+function wMarginPmf(mu, sigma){
+  const pmf=_wRawPmf(mu,sigma,_wBumps(sigma));
+  let tot=0; for(const m in pmf) tot+=pmf[m];
+  const out={}; for(const m in pmf) out[m]=pmf[m]/tot;
+  return out;
+}
+// `line` is the HOME spread. Home covers when margin > -line.
+function wCoverProb(pmf, line, side){
+  const need=-line; let win=0,push=0,lose=0;
+  for(const k in pmf){
+    const m=+k, p=pmf[k];
+    if(Math.abs(m-need)<1e-9) push+=p; else if(m>need) win+=p; else lose+=p;
+  }
+  return side==='away' ? [lose,push,win] : [win,push,lose];
+}
+function wAmerToProb(a){ return a==null?null:(a<0 ? (-a)/((-a)+100) : 100/(a+100)); }
+function wDevig2(a1,a2){
+  const p1=wAmerToProb(a1), p2=wAmerToProb(a2);
+  if(p1==null||p2==null) return null;
+  let lo=0.5, hi=3;
+  for(let i=0;i<80;i++){ const k=(lo+hi)/2; if(Math.pow(p1,k)+Math.pow(p2,k)>1) lo=k; else hi=k; }
+  const k=(lo+hi)/2;
+  return [Math.pow(p1,k), Math.pow(p2,k)];
+}
+// Centre the distribution so it reproduces the FIELD's own de-vigged price. The
+// field is the truth here; the only question is whether DraftKings is offering
+// something better than it.
+function wCalibrateMu(fieldLine, fH, fA, sigma){
+  const dv=wDevig2(fH,fA);
+  const target=dv?dv[0]:0.5;
+  let lo=-60, hi=60;
+  for(let i=0;i<60;i++){
+    const mid=(lo+hi)/2;
+    const [w,pu]=wCoverProb(wMarginPmf(mid,sigma), fieldLine, 'home');
+    if(w+pu/2 < target) lo=mid; else hi=mid;
+  }
+  return (lo+hi)/2;
+}
+// Edge in probability points for each side of DraftKings' NUMBER. Fair value
+// comes from the field's line and price; the cost is DraftKings' VIGGED price,
+// because on a sportsbook the vig IS the cost.
+function wNumberEdge(dkLine, dkH, dkA, fieldLine, fH, fA, sigma){
+  const mu=wCalibrateMu(fieldLine,fH,fA,sigma);
+  const pmf=wMarginPmf(mu,sigma);
+  const out={};
+  for(const side of ['home','away']){
+    const price=(side==='home')?dkH:dkA;
+    const [w,pu]=wCoverProb(pmf,dkLine,side);
+    const paid=wAmerToProb(price);
+    if(paid==null){ out[side]=null; continue; }
+    // A push refunds the stake, so judge the bet on the probability of winning
+    // GIVEN it resolves. The American price is already that same conditional
+    // break-even, so it must NOT be rescaled by the push mass as well.
+    const live=1-pu;
+    out[side]=(live>1e-9)?(w/live-paid):0;
+  }
+  return out;
+}
+
+// Spread NUMBERS from the field, DraftKings held out of the median it is judged
+// against. Football only: the number is what pays there, and a spreads call costs
+// the same one credit as h2h, so this doubles football's spend and leaves the
+// other sports alone.
+const SHARP_SPREADS = {};        // sportKey -> { "home|away": [ {...}, ... ] }
+function _decToAmer(d){ return (d==null)?null:(d>=2 ? (d-1)*100 : -100/(d-1)); }
+async function fetchSharpSpreads(sport){
+  try{
+    const ck='sharp_spreads_'+sport+'_v1';
+    const cached=JSON.parse(localStorage.getItem(ck)||'null');
+    if(cached && (Date.now()-cached.ts) < ODDS_CACHE_MIN*60000){ SHARP_SPREADS[sport]=cached.map; return; }
+  }catch(e){}
+  try{
+    const r=await fetch(`${ODDS_PROXY}?odds=${encodeURIComponent(sport)}&markets=spreads`);
+    if(!r.ok) return;
+    const games=await r.json(); const map={};
+    for(const g of games){
+      let dk=null; const pts=[], hp=[], ap=[];
+      for(const bk of (g.bookmakers||[])){
+        const mk=(bk.markets||[]).find(m=>m.key==='spreads'); if(!mk) continue;
+        const ho=mk.outcomes.find(o=>o.name===g.home_team), ao=mk.outcomes.find(o=>o.name===g.away_team);
+        if(!ho||!ao||ho.point==null) continue;
+        if(bk.key==='draftkings'){ dk={line:ho.point, h:_decToAmer(ho.price), a:_decToAmer(ao.price)}; continue; }
+        pts.push(ho.point); hp.push(_decToAmer(ho.price)); ap.push(_decToAmer(ao.price));
+      }
+      if(!dk || pts.length<3) continue;
+      const med=arr=>{const x=[...arr].sort((p,q)=>p-q);const n=x.length;
+        return n%2?x[(n-1)/2]:(x[n/2-1]+x[n/2])/2;};
+      const key=normName(g.home_team)+'|'+normName(g.away_team);
+      (map[key]=map[key]||[]).push({
+        dkLine:dk.line, dkH:dk.h, dkA:dk.a,
+        fieldLine:med(pts), fH:med(hp), fA:med(ap),
+        nBooks:pts.length, commence:Date.parse(g.commence_time),
+      });
+    }
+    SHARP_SPREADS[sport]=map;
+    try{ localStorage.setItem('sharp_spreads_'+sport+'_v1',JSON.stringify({ts:Date.now(),map})); }catch(e){}
+  }catch(e){ console.warn('sharp spreads fetch failed:',e.message); }
+}
+function sharpSpreadFor(homeName, awayName, start, sport){
+  const key=SHARP_SPORT_KEY[sport]||sport;
+  const arr=(SHARP_SPREADS[key]||{})[normName(homeName)+'|'+normName(awayName)];
+  if(!arr||!arr.length) return null;
+  const t=(typeof start==='number'&&isFinite(start))?start:(Date.parse(start)||Date.now());
+  let best=null,bd=Infinity;
+  for(const e of arr){ const d=Math.abs(e.commence-t); if(d<bd){bd=d;best=e;} }
+  return bd<=18*3600000 ? best : null;
+}
+
 // Scans one league and returns BOTH the qualifying plays and the closest miss.
 // The miss matters: a panel that only ever says "nothing today" is
 // indistinguishable from a panel that is broken, and this page has shipped
@@ -4277,12 +4434,44 @@ function crossScan(LG){
       if(raw>=bar) plays.push(rec);
       if(!best || raw>best.raw) best=rec;
     }
+
+    // FOOTBALL SPREADS. The number, not the price. A moneyline comparison cannot
+    // see that +3 against a field of +2.5 is worth ~4pp, which is the only edge
+    // in football big enough to clear this bar with room.
+    if(LG==='nfl'||LG==='cfb'){
+      const sp=sharpSpreadFor(r.homeFull||r.homeName, r.awayFull||r.awayName, r.start, LG);
+      if(sp && sp.nBooks>=3 && sp.dkH!=null && sp.dkA!=null){
+        const e=wNumberEdge(sp.dkLine, sp.dkH, sp.dkA, sp.fieldLine, sp.fH, sp.fA, W_SIGMA[LG]);
+        for(const side of ['home','away']){
+          if(e[side]==null) continue;
+          const line=(side==='home')?sp.dkLine:-sp.dkLine;
+          const rec={side:(side==='home')?r.home:r.away,
+                     name:(side==='home')?(r.homeName||r.home):(r.awayName||r.away),
+                     market:'SPREAD', line, ml:(side==='home')?sp.dkH:sp.dkA,
+                     fair:null, raw:e[side], edge:e[side]*CARD_CROSS_SHRINK,
+                     books:sp.nBooks, fieldLine:(side==='home')?sp.fieldLine:-sp.fieldLine,
+                     matchup:(r.away||'')+'@'+(r.home||'')};
+          if(rec.raw>=bar) plays.push(rec);
+          if(!best || rec.raw>best.raw) best=rec;
+        }
+      }
+    }
   }
   plays.sort((a,b)=>b.edge-a.edge);
   return {plays, best, scanned, bar};
 }
 // One row, rendered the same way in every panel.
 function crossRowHtml(p){
+  if(p.market==='SPREAD'){
+    const sgn=(x)=>(x>0?'+':'')+x;
+    return '<div class="bb-row"><span class="bb-mu">'+esc(p.matchup)+'</span>'
+      +'<span class="bb-type bb-type-sp">SPREAD</span>'
+      +'<span class="bb-pick">'+esc(p.name)+' '+sgn(p.line)+' ('+fvAmer(p.ml)+')</span>'
+      +'<span class="bb-edge">+'+(p.edge*100).toFixed(1)+'pp</span>'
+      +'<span class="bb-ok">field '+sgn(p.fieldLine)+'</span>'
+      +'<span class="bb-need">better number than the field</span>'
+      +'<span class="bb-stake">'+p.books+' books</span></div>';
+  }
   return '<div class="bb-row"><span class="bb-mu">'+esc(p.matchup)+'</span>'
     +'<span class="bb-type bb-type-ml">ML</span>'
     +'<span class="bb-pick">'+esc(p.name)+' '+fvAmer(p.ml)+'</span>'
