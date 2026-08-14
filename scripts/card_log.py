@@ -54,7 +54,7 @@ def get(url, tries=3):
     last = None
     for _ in range(tries):
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "card-log/1.0",
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0",
                                                        "Accept": "application/json"})
             with urllib.request.urlopen(req, timeout=30) as r:
                 return json.load(r)
@@ -406,16 +406,32 @@ def grade(entries):
         if datetime.now(timezone.utc) < t + timedelta(hours=4):
             continue
         by_day.setdefault((e["league"], t.strftime("%Y%m%d")), []).append(e)
-    paths = {"MLB": "baseball/mlb", "WNBA": "basketball/wnba"}
+    # Every league the card can advise. NFL and CFB were missing entirely, so a
+    # football play would have sat pending forever — silently, since an
+    # ungradeable entry looks identical to one whose game has not finished.
+    paths = {"MLB": "baseball/mlb", "WNBA": "basketball/wnba",
+             "NFL": "football/nfl", "CFB": "football/college-football"}
     for (league, ymd), group in by_day.items():
         path = paths.get(league)
         if not path:
             continue
-        try:
-            d = get(f"https://site.api.espn.com/apis/site/v2/sports/{path}"
-                    f"/scoreboard?dates={ymd}&limit=200")
-        except Exception as e:
-            print(f"  ! grade {league} {ymd}: {e}")
+        # site.api.espn.com returns 403 to the GitHub runner for the basketball
+        # scoreboard — proven by wnba_log.py's probe on 2026-08-14, which recorded
+        # 403 on every attempt while the same call succeeded from a desktop. This
+        # grader used that host alone, so WNBA card bets could be logged and then
+        # never graded. site.web.api.espn.com answers the runner.
+        # groups=80 is the FBS filter; without it ESPN returns a top-25 subset and
+        # most college games would be missing from the lookup.
+        qs = f"/scoreboard?dates={ymd}&limit=200" + ("&groups=80" if league == "CFB" else "")
+        d = None
+        for host in ("https://site.api.espn.com/apis/site/v2/sports/",
+                     "https://site.web.api.espn.com/apis/site/v2/sports/"):
+            try:
+                d = get(host + path + qs)
+                break
+            except Exception as e:
+                print(f"  ! grade {league} {ymd} via {host.split('//')[1][:16]}: {e}")
+        if d is None:
             continue
         finals = {}
         for ev in d.get("events", []):
