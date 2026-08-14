@@ -912,7 +912,13 @@ function trackStats(){
   for(const e of done){
     gN++; if((e.model.game>=0.5)===!!e.result.homeWon) gHit++;
     // Kalshi disagreement record (reference)
-    if(e.kalshi.game!=null && Math.abs(e.model.game-e.kalshi.game)>=0.05){
+    // Entries logged since Kalshi was removed have NO `kalshi` key at all, so
+    // this threw the moment one of them was GRADED — trackStats() runs over
+    // graded entries only, which is why it survived the day they were logged
+    // and died overnight. renderTrackBar() calls this, load() calls that, and
+    // the throw aborted the render before a single game was written: the WNBA
+    // view went blank and Today's Card lost its only source of model plays.
+    if(e.kalshi && e.kalshi.game!=null && Math.abs(e.model.game-e.kalshi.game)>=0.05){
       vN++;
       const betHome=e.model.game>e.kalshi.game;
       if(betHome===!!e.result.homeWon) vHit++;

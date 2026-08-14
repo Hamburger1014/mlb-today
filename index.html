@@ -802,7 +802,14 @@ function switchView(v){
     // The card spans every sport, so it needs all of them primed. WNBA loads
     // lazily and football is board-only, so kick both off; MLB is already in
     // memory from init.
+    // The card ranks ACROSS sports, so it needs every sport's reference price —
+    // not just its rows. It was fetching football rows and never football odds,
+    // so 98 CFB and 10 NFL rows sat there with fairSharp null and crossScan
+    // reported "scanned 0". The card could not have shown a football price play
+    // at all, which is exactly what it exists to do.
     const jobs=[fvFetchFootball().catch(()=>{})];
+    for(const sp of ['mlb','wnba','nfl','cfb'])
+      jobs.push(new Promise(res=>ensureSharpFor(sp,res)));
     if(!wnbaLoaded){ wnbaLoaded=true; jobs.push(Promise.resolve(WNBA.load()).catch(()=>{})); }
     Promise.all(jobs).then(renderCard).catch(()=>renderCard());
     loadCardServerLog().then(renderCard).catch(()=>{});
@@ -4989,7 +4996,13 @@ function trackStats(){
   let gN=0,gHit=0,qN=0,qHit=0,vN=0,vHit=0,vgN=0,vgHit=0,vgROI=0,spN=0,spHit=0,spROI=0;
   for(const e of done){
     gN++; if((e.model.game>=0.5)===!!e.result.homeWon) gHit++;
-    if(e.kalshi.game!=null&&Math.abs(e.model.game-e.kalshi.game)>=0.05){
+    // Entries logged since Kalshi was removed have NO `kalshi` key at all, so
+    // this threw the moment one of them was GRADED — trackStats() runs over
+    // graded entries only, which is why it survived the day they were logged
+    // and died overnight. renderTrackBar() calls this, load() calls that, and
+    // the throw aborted the render before a single game was written: the WNBA
+    // view went blank and Today's Card lost its only source of model plays.
+    if(e.kalshi&&e.kalshi.game!=null&&Math.abs(e.model.game-e.kalshi.game)>=0.05){
       vN++;
       if((e.model.game>e.kalshi.game)===!!e.result.homeWon) vHit++;
     }
