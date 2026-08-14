@@ -374,14 +374,36 @@ def main():
     us_tomorrow = (now - timedelta(hours=5) + timedelta(days=1)).strftime("%Y%m%d")
     today = []
     seen_ids = set()
+    probe = {}          # what each query actually returned, for the diagnostic
     for ymd in (us_today, us_tomorrow):
         try:
-            for g in scoreboard(ymd):
+            got = scoreboard(ymd)
+            probe[ymd] = len(got)
+            for g in got:
                 if g["id"] not in seen_ids:
                     seen_ids.add(g["id"]); today.append(g)
         except Exception as ex:
+            probe[ymd] = f"ERR {type(ex).__name__}: {str(ex)[:90]}"
             print(f"  ! scoreboard {ymd}: {ex}")
-    print(f"scoreboard {us_today}/{us_tomorrow}: {len(today)} games")
+
+    # FALLBACK. The scheduled runner gets 0 games from the dated query while the
+    # same call returns 5 from a desktop — proven by the lastRun diagnostic on
+    # 2026-08-14T15:59, which recorded scoreboardGames 0 for a window that had
+    # five. ESPN's UNDATED scoreboard is a different code path and is what the
+    # football logger already falls back to. Anything it returns is filtered to
+    # pregame-and-not-already-logged below, so a wrong "today" cannot corrupt
+    # anything — it can only fail to help.
+    if not today:
+        try:
+            got = scoreboard()
+            probe["undated"] = len(got)
+            for g in got:
+                if g["id"] not in seen_ids:
+                    seen_ids.add(g["id"]); today.append(g)
+        except Exception as ex:
+            probe["undated"] = f"ERR {type(ex).__name__}: {str(ex)[:90]}"
+            print(f"  ! scoreboard undated: {ex}")
+    print(f"scoreboard {us_today}/{us_tomorrow}: {len(today)} games  {probe}")
     pregame = [g for g in today if not g["isFinal"] and not g["isLive"] and g["id"] not in by_id]
 
     # Diagnosis written INTO the committed file. The scheduled job fired 34 times
@@ -393,6 +415,7 @@ def main():
     diag = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "window": f"{us_today}/{us_tomorrow}",
             "scoreboardGames": len(today), "pregameGames": len(pregame),
+            "probe": probe,
             "skippedNoRatings": 0, "ratingsTeams": 0}
     n_before = len(by_id)
 
