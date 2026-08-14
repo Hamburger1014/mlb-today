@@ -384,9 +384,22 @@ def main():
     print(f"scoreboard {us_today}/{us_tomorrow}: {len(today)} games")
     pregame = [g for g in today if not g["isFinal"] and not g["isLive"] and g["id"] not in by_id]
 
+    # Diagnosis written INTO the committed file. The scheduled job fired 34 times
+    # across 2026-08-11..13 and logged nothing, while the same script run locally
+    # logged five games. Every step reported success, so the Actions summary said
+    # nothing was wrong, and reading the real stdout needs a token this
+    # environment does not have. Recording what the run SAW makes the next
+    # failure diagnosable from the committed data alone.
+    diag = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "window": f"{us_today}/{us_tomorrow}",
+            "scoreboardGames": len(today), "pregameGames": len(pregame),
+            "skippedNoRatings": 0, "ratingsTeams": 0}
+    n_before = len(by_id)
+
     # ── LOG ──
     if pregame:
         stats, lg = load_ratings()
+        diag["ratingsTeams"] = len(stats or {})
         y = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y%m%d")
         try: b2b = {t for g in scoreboard(y) for t in (g["home"], g["away"])}
         except Exception: b2b = set()
@@ -396,6 +409,7 @@ def main():
         for g in pregame:
             m = predict(g["home"], g["away"], stats, lg, b2b, inj)
             if not m:
+                diag["skippedNoRatings"] += 1
                 print(f"  skip {g['away']}@{g['home']} (no ratings)"); continue
             key = "|".join(sorted([g["home"], g["away"]]))
             e = {
@@ -539,6 +553,8 @@ def main():
             print(f"  CLV: {len(clv)} games logged, none have moved yet")
 
     entries.sort(key=lambda e: (e["date"], e["id"]))
+    diag["loggedThisRun"] = max(0, len(entries) - n_before)
+    store["lastRun"] = diag
     store["entries"] = entries[-800:]
     store["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
