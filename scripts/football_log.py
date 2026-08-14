@@ -31,7 +31,11 @@ def get(url, tries=3):
     last = None
     for _ in range(tries):
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "football-log/1.0",
+            # A browser UA, deliberately. ESPN 403s a custom agent, and when
+            # mlb_log.py sent "mlb-log/1.0" its closing captures stopped without
+            # any error surfacing — the same silent failure this file was one
+            # ESPN policy change away from.
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0",
                                                        "Accept": "application/json"})
             with urllib.request.urlopen(req, timeout=30) as r:
                 return json.load(r)

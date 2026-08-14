@@ -347,19 +347,35 @@ def candidates():
                         continue
                     add("WNBA", gid, "espn", home, away, start, side_home, p, mkt,
                         "MODEL", "moneyline model (w=0.15)", amer)
-            # model — spread (home side only, as the page offers)
+            # model — spread, BOTH SIDES.
+            #
+            # This used to evaluate the home side only, with the note "as the
+            # page offers". The page has offered whichever side has better EV for
+            # some time, so the independent record was silently dropping every
+            # away-side play the card advised. That is worse than a missing
+            # feature: the WNBA spread is the only market with earned weight, it
+            # needs roughly 583 bets to reach 2 sigma, and a home-only sample
+            # measures a biased subset of the thing being decided.
             mu = (e.get("model") or {}).get("mu")
             if mu is not None and sp and sp.get("homeOdds") is not None:
                 sd = FIT["spreadSd"]
-                thr = -sp["homeLine"]
-                p_cover = 1 - norm_cdf(thr, mu, sd)
+                p_cover = 1 - norm_cdf(-sp["homeLine"], mu, sd)
                 dvs = devig_power([ml_to_raw(sp["homeOdds"]), ml_to_raw(sp["awayOdds"])])
                 if dvs:
-                    fair = sigmoid(W_WNBA_SP * logit(p_cover) + (1 - W_WNBA_SP) * logit(dvs[0]))
-                    if fair * payout(sp["homeOdds"]) - (1 - fair) >= 0.04:
-                        add("WNBA", gid, "espn", home, away, start, True, fair, dvs[0],
-                            "MODEL", "spread model (w=0.40)", sp["homeOdds"],
-                            market="SPREAD", line=sp["homeLine"])
+                    fair_h = sigmoid(W_WNBA_SP * logit(p_cover) + (1 - W_WNBA_SP) * logit(dvs[0]))
+                    # No push mass under a continuous normal, so the away side is
+                    # the complement. Each side carries ITS OWN line and price.
+                    for side_home in (True, False):
+                        fair = fair_h if side_home else 1 - fair_h
+                        price = dvs[0] if side_home else dvs[1]
+                        amer = sp["homeOdds"] if side_home else sp["awayOdds"]
+                        line = sp["homeLine"] if side_home else sp.get(
+                            "awayLine", -sp["homeLine"])
+                        if fair * payout(amer) - (1 - fair) < 0.04:
+                            continue
+                        add("WNBA", gid, "espn", home, away, start, side_home, fair, price,
+                            "MODEL", "spread model (w=0.40)", amer,
+                            market="SPREAD", line=line)
 
     out.sort(key=lambda c: -c["edge"])
     # correlated exposure: one game is one position
@@ -426,7 +442,13 @@ def grade(entries):
                 else:
                     won = (hs > as_) if e["sideIsHome"] else (as_ > hs)
             elif e["market"] == "SPREAD":
-                m = (hs - as_) + (e.get("line") or 0)
+                # `line` is the BET SIDE's own line, so the margin has to be
+                # measured from that side. Grading every spread from the home
+                # team's point of view marks an away-side winner as a loss.
+                if e.get("sideIsHome") is None:
+                    continue
+                margin = (hs - as_) if e["sideIsHome"] else (as_ - hs)
+                m = margin + (e.get("line") or 0)
                 push = abs(m) < 1e-9
                 won = None if push else m > 0
             if won is None and not push:

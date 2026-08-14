@@ -4116,6 +4116,27 @@ function mlbClvHtml(){
 // one that reads well: what the log has done, then what it cost, then whether it
 // beat the close. Each sport fills it from its own log; a sport with nothing to
 // report hides the strip rather than showing a row of zeroes.
+// How long since a log last recorded a GAME — not since the file was touched.
+// A job that runs, rewrites updated_at and logs nothing looks perfectly healthy
+// by file timestamp. That is exactly how the WNBA server log went from 2026-08-05
+// to 2026-08-13 without adding a single game while the league played on the 6th,
+// 8th, 10th and 12th, and nothing on this page said a word about it.
+function logFreshness(dates){
+  const ds=dates.filter(Boolean).sort();
+  if(!ds.length) return {days:null,last:null};
+  const last=ds[ds.length-1];
+  const days=Math.floor((Date.now()-Date.parse(last+'T12:00:00Z'))/86400000);
+  return {days,last};
+}
+function stalenessHtml(f,label){
+  if(f.days==null)
+    return '<span class="track-stat" style="color:#f87171" title="Nothing has ever been logged here">&#x26A0; '+label+': empty</span>';
+  if(f.days<=1) return '';
+  const col=f.days>=3?'#f87171':'#fbbf24';
+  return '<span class="track-stat" style="color:'+col+'" '
+    +'title="The scheduled job may be running and logging nothing. Check the Actions log.">'
+    +'&#x26A0; last logged '+f.last+' ('+f.days+'d ago)</span>';
+}
 function renderMlbTrackBar(){
   const el=document.getElementById('mlb-track-bar');
   if(!el) return;
@@ -4145,6 +4166,7 @@ function renderMlbTrackBar(){
       +' <span style="color:var(--dim2)">(raw '+(c.avgCents>=0?'+':'')+c.avgCents.toFixed(2)
       +'&cent;, n='+c.n+')</span></span>';
   }
+  h+=stalenessHtml(logFreshness(entries.map(e=>e.date)),'MLB log');
   if(pending) h+='<span class="track-stat" style="color:var(--dim2)">'+pending+' pending</span>';
   if(entries.length)
     h+='<span class="track-stat" style="color:var(--dim2)" title="Logged and graded by a scheduled job, independent of this browser">&#x1F310; '
@@ -5027,6 +5049,7 @@ function renderTrackBar(){
     if(s.vgN) html+=`<span class="track-stat">ML value bets (≥3% EV): <b>${s.vgHit}/${s.vgN}</b> · ROI <b class="${s.vgROI>=0?'track-good':'track-bad'}">${s.vgROI>=0?'+':''}${(s.vgROI/s.vgN*100).toFixed(0)}%</b></span>`;
     if(s.spN) html+=`<span class="track-stat">Spread bets (≥4% EV): <b>${s.spHit}/${s.spN}</b> · ROI <b class="${s.spROI>=0?'track-good':'track-bad'}">${s.spROI>=0?'+':''}${(s.spROI/s.spN*100).toFixed(0)}%</b></span>`;
   }
+  html+=stalenessHtml(logFreshness((serverLog||[]).map(e=>e.date)),'WNBA log');
   html+=betsHtml();
   html+=clvHtml();
   if(pending) html+=`<span class="track-stat" style="color:var(--dim2)">${pending} pending</span>`;
