@@ -161,8 +161,18 @@ def scoreboard(ymd=None):
     raise RuntimeError(last or "no scoreboard host answered")
 
 
-def load_ratings():
-    """Recency-weighted PF/PA from game logs, seeded with prior-season ratings."""
+_SCHED_CACHE = {}
+
+
+def load_ratings(asof=None):
+    """Recency-weighted PF/PA from game logs, seeded with prior-season ratings.
+
+    `asof` (an ISO date) keeps only games that finished STRICTLY BEFORE it, which
+    is what makes a point-in-time replay possible — without it every backtest
+    would be scoring predictions built from the results it is being graded on.
+    Raw schedules are cached per team, so replaying a whole season costs one
+    fetch per team rather than one per game.
+    """
     lam = 0.5 ** (1.0 / FIT["halfLife"])
     stats = {}
     for abbr, (tid, _) in TEAMS.items():
@@ -174,7 +184,11 @@ def load_ratings():
             wn = float(FIT["priorW0"])
         done = []
         try:
-            d = get(f"{ESPN}/teams/{tid}/schedule")
+            if tid in _SCHED_CACHE:
+                d = _SCHED_CACHE[tid]
+            else:
+                d = get(f"{ESPN}/teams/{tid}/schedule")
+                _SCHED_CACHE[tid] = d
             for ev in d.get("events", []):
                 stype = ev.get("seasonType")
                 stype = stype.get("type") if isinstance(stype, dict) else stype
@@ -193,6 +207,8 @@ def load_ratings():
                 done.append((ev.get("date"), my, op, me.get("winner") is True))
         except Exception as e:
             print(f"  ! schedule {abbr}: {e}")
+        if asof:
+            done = [x for x in done if (x[0] or "") < asof]
         done.sort(key=lambda x: x[0] or "")
         wins = losses = 0
         for _, my, op, won in done:
