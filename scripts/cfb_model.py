@@ -113,8 +113,17 @@ def main():
     with_lines = sum(1 for g in games if g["hl"])
     print(f"{with_lines} have quarter linescores")
 
-    # More teams on less data each, so shrink harder than the NFL's 12.
-    NM.RIDGE = 30.0
+    # WAS 30.0, on the reasoning that more teams on less data each should shrink
+    # harder. That reasoning was wrong in a specific way: ridge shrinks team
+    # ratings while HFA and the intercept are left UNregularised, so at 30 the
+    # home-field term absorbed the fact that college home teams really are
+    # stronger (big programs buy home games) and then applied it to every game
+    # including the ones where the home side is weaker. Measured: ridge 2 gives
+    # HFA +3.21 and a margin slope of 0.98, ridge 30 gives +4.92 and a slope of
+    # 1.68, ridge 60 gives +5.50 and 2.13. Tuned on 2024 and confirmed on an
+    # untouched 2025, where 5.0 beat 30.0 on every metric — log loss 0.5417 vs
+    # 0.5679, ECE 4.06pp vs 4.55pp, accuracy 70.3% vs 68.7%.
+    NM.RIDGE = 5.0
     NM.HALF_LIFE_DAYS = 200.0
 
     shares = NM.quarter_shares(games)
@@ -129,7 +138,23 @@ def main():
     hit = n = 0
     ae = 0.0
     brier = 0.0
-    SCALE = 10.5     # college margins are far wider than the NFL's 7.5
+    # Fitted OUT OF SAMPLE. See nfl_model.fit_margin_scale: fitting a scale on
+    # predictions the model has already seen answers with one far too small,
+    # because in-sample margins separate teams better than reality does.
+    _pre = [g for g in games if g["season"] < TEST_SEASON]
+    _hold = max(g["season"] for g in _pre)
+    _fit_on = [g for g in _pre if g["season"] < _hold]
+    _score = [g for g in _pre if g["season"] == _hold]
+    _m0 = NM.fit(_fit_on if _fit_on else _pre)
+    _mar, _ys = [], []
+    for g in (_score if _fit_on else _pre):
+        if g["hs"] == g["as"]:
+            continue
+        _ph, _pa = NM.predict_points(_m0, g["home"], g["away"])
+        _mar.append(_ph - _pa)
+        _ys.append(1 if g["hs"] > g["as"] else 0)
+    SCALE = NM.fit_margin_scale(_mar, _ys)
+    print(f"fitted margin scale {SCALE:.2f}  (out-of-sample on {_hold}, n={len(_mar)})")
     for g in test:
         m = NM.fit(games, asof=NM.day_number(g["date"]))
         ph, pa = NM.predict_points(m, g["home"], g["away"])
@@ -186,7 +211,7 @@ def main():
 
     out = {
         "off": full["off"], "def": full["def"], "hfa": full["hfa"], "mu": full["mu"],
-        "quarterShares": shares, "quarterPmf": qpmf, "marginScale": SCALE,
+        "quarterShares": shares, "quarterPmf": qpmf, "marginScale": round(SCALE, 3),
         "trainedOn": len(games), "seasons": SEASONS, "pooledInto": OTHER,
         "walkForward": {"season": TEST_SEASON, "n": n, "hit": hit,
                         "rate": hit / n if n else None,

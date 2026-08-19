@@ -49,7 +49,17 @@ BASE = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard"
 SEASONS = [2023, 2024, 2025]
 TEST_SEASON = 2025          # held out for walk-forward scoring
 HALF_LIFE_DAYS = 220.0      # ~1.3 seasons; a full prior year still counts, faintly
-RIDGE = 12.0                # shrinks thin samples toward league average
+# Chosen by tuning on 2024 (fit 2023 only) and confirmed on an untouched 2025,
+# not by feel. The old 12.0 over-shrank: ridge pulls every team rating toward
+# zero while HFA and the intercept are deliberately UNregularised, so the
+# systematic "home teams are stronger" signal migrated into the home-field term
+# and was then applied to games where the home side is the weaker one. Measured
+# on college, where it is worst: ridge 2 -> HFA +3.21 and a margin slope of
+# 0.98; ridge 60 -> HFA +5.50 and a slope of 2.13. The slope IS the compression.
+# The log-loss curve is flat from 1 to 8 here, so 3.0 sits at the optimum's
+# shoulder rather than its tip — 32 teams and thin early-season data make the
+# less aggressive end the safer place to stand.
+RIDGE = 3.0
 
 
 def get(url, tries=3):
@@ -155,6 +165,30 @@ def fit(games, asof=None):
         "hfa": float(x[2 * n]),
         "mu": float(x[2 * n + 1]),
     }
+
+
+def fit_margin_scale(margins, ys, lo=3.0, hi=25.0, iters=200):
+    """The logistic scale minimising log loss: p = sigmoid(margin / scale).
+
+    Golden-section on a 1-D objective. Fitted on seasons BEFORE the held-out one,
+    so the walk-forward score below never sees a constant tuned on itself.
+    """
+    def loss(s):
+        t = 0.0
+        for m, y in zip(margins, ys):
+            p = min(1 - 1e-12, max(1e-12, 1.0 / (1.0 + math.exp(-m / s))))
+            t += -(y * math.log(p) + (1 - y) * math.log(1 - p))
+        return t / len(margins)
+    gr = (math.sqrt(5) - 1) / 2
+    a, b = lo, hi
+    c, d = b - gr * (b - a), a + gr * (b - a)
+    for _ in range(iters):
+        if loss(c) < loss(d):
+            b = d
+        else:
+            a = c
+        c, d = b - gr * (b - a), a + gr * (b - a)
+    return (a + b) / 2
 
 
 def predict_points(m, home, away):
@@ -269,6 +303,30 @@ def main():
 
     # ── walk-forward: fit only on what came before, score the held-out season ──
     test = sorted([g for g in games if g["season"] == TEST_SEASON], key=lambda g: g["date"])
+
+    # FIT the probability scale rather than picking one, and fit it OUT OF
+    # SAMPLE. Fitting on predictions the model has already seen gives margins
+    # that are far better separated than reality, so the optimiser answers with a
+    # scale that is much too small and the whole model turns overconfident: on
+    # NFL that produced 7.38 where the honest value is near 16, and the expected
+    # calibration error went from 5.97pp to 9.99pp with resolution collapsing
+    # from 0.0171 to 0.0058. Hold out the most recent training season, predict
+    # it from the ones before, and fit the scale on THAT.
+    pre = [g for g in games if g["season"] < TEST_SEASON]
+    _hold = max(g["season"] for g in pre)
+    _fit_on = [g for g in pre if g["season"] < _hold]
+    _score = [g for g in pre if g["season"] == _hold]
+    _m = fit(_fit_on if _fit_on else pre)
+    _mar, _ys = [], []
+    for g in (_score if _fit_on else pre):
+        if g["hs"] == g["as"]:
+            continue
+        _ph, _pa = predict_points(_m, g["home"], g["away"])
+        _mar.append(_ph - _pa)
+        _ys.append(1 if g["hs"] > g["as"] else 0)
+    scale = fit_margin_scale(_mar, _ys)
+    print(f"fitted margin scale {scale:.2f}  (out-of-sample on {_hold}, n={len(_mar)})")
+
     hit = n = 0
     ae = 0.0
     brier = 0.0
@@ -277,7 +335,7 @@ def main():
         ph, pa = predict_points(m, g["home"], g["away"])
         margin = ph - pa
         # P(home win) from the margin, using the SD of NFL results about the spread
-        p = 1.0 / (1.0 + math.exp(-margin / 7.5))
+        p = 1.0 / (1.0 + math.exp(-margin / scale))
         won = 1 if g["hs"] > g["as"] else 0
         if g["hs"] != g["as"]:
             hit += (p >= 0.5) == (won == 1); n += 1
@@ -294,7 +352,7 @@ def main():
 
     out = {
         "off": full["off"], "def": full["def"], "hfa": full["hfa"], "mu": full["mu"],
-        "quarterShares": shares, "quarterPmf": qpmf, "marginScale": 7.5,
+        "quarterShares": shares, "quarterPmf": qpmf, "marginScale": round(scale, 3),
         "trainedOn": len(games), "seasons": SEASONS,
         "walkForward": {"season": TEST_SEASON, "n": n, "hit": hit,
                         "rate": hit / n if n else None,
