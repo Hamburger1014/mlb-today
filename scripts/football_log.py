@@ -15,7 +15,8 @@ never needs to know what anyone bet.
 
 Output: data/football_lines.json
 """
-import json, os, urllib.request
+import importlib.util
+import json, math, os, urllib.request
 from datetime import datetime, timedelta, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -25,6 +26,54 @@ BASE = "https://site.api.espn.com/apis/site/v2/sports/"
 LEAGUES = {"NFL": "football/nfl", "CFB": "football/college-football"}
 ODDS_PROXY = "https://mlb-kalshi.gabrielhiginio2005.workers.dev"
 ODDS_SPORT = {"NFL": "nfl", "CFB": "ncaaf"}
+MODEL_FILE = {"NFL": "nfl_model.json", "CFB": "cfb_model.json"}
+
+# The football models are loaded from their exported coefficients and used to
+# record a PREGAME prediction per game. Nothing did this before: the NFL and CFB
+# models predict on the page and no logger touched them, so neither could ever be
+# measured against the closing price and both would have sat at weight 0 for a
+# whole season by default rather than by evidence. That is the same trap the MLB
+# and WNBA models were rescued from by mlb_log.py and wnba_log.py.
+_MODELS = {}
+
+
+def load_model(league):
+    """The exported fit. Its keys are exactly what predict_points() expects."""
+    if league in _MODELS:
+        return _MODELS[league]
+    f = MODEL_FILE.get(league)
+    m = None
+    if f:
+        try:
+            m = json.load(open(os.path.join(ROOT, "data", f)))
+        except Exception as e:
+            print(f"  ! model {league}: {e}")
+    _MODELS[league] = m
+    return m
+
+
+def model_predict(league, home, away):
+    """Predicted margin and P(home) from the shipped coefficients.
+
+    Imports predict_points from nfl_model rather than re-deriving it, so this
+    cannot drift from the fitter the way a fourth transcription would.
+    """
+    m = load_model(league)
+    if not m or home not in (m.get("off") or {}) or away not in (m.get("off") or {}):
+        return None            # unseen team: say nothing rather than guess
+    spec = importlib.util.spec_from_file_location("nfl_model",
+                                                  os.path.join(HERE, "nfl_model.py"))
+    NM = _MODELS.get("_nm")
+    if NM is None:
+        NM = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(NM)
+        _MODELS["_nm"] = NM
+    ph, pa = NM.predict_points(m, home, away)
+    margin = ph - pa
+    sc = m.get("marginScale") or 10.0
+    return {"margin": round(margin, 2), "homePts": round(ph, 1), "awayPts": round(pa, 1),
+            "pHome": round(1.0 / (1.0 + math.exp(-margin / sc)), 4),
+            "at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
 
 
 def get(url, tries=3):
@@ -183,7 +232,7 @@ def main():
             pass
     games = store.get("games", {})
 
-    seen = closed = added = matched = 0
+    seen = closed = added = matched = predicted = 0
     for league, path in LEAGUES.items():
         try:
             evs = scoreboard(path)
@@ -230,6 +279,23 @@ def main():
             if state == "STATUS_SCHEDULED":
                 g["closing"] = snap
                 closed += 1
+                # Recorded ONCE, the first time this game is seen pregame, and
+                # never overwritten. A prediction that gets refreshed as kickoff
+                # approaches is not a forward prediction — it quietly absorbs
+                # whatever the market learned in between, which is exactly the
+                # lookahead that makes a backtest lie.
+                # NEVER on preseason. The page already refuses to predict it —
+                # the ratings are fit on regular-season football, where both
+                # sides play their starters — and a logger that disagrees with
+                # the page would fill the forward record with predictions the
+                # model itself disowns, then measure them. ESPN's season type 1
+                # is preseason.
+                _st = (ev.get("season") or {}).get("type")
+                if "model" not in g and _st != 1:
+                    mp = model_predict(league, g["home"], g["away"])
+                    if mp:
+                        g["model"] = mp
+                        predicted += 1
             if state == "STATUS_FINAL":
                 try:
                     g["final"] = {"hs": int(float(home.get("score"))),
@@ -246,8 +312,10 @@ def main():
     store["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     json.dump(store, open(OUT, "w"), separators=(",", ":"))
+    graded = sum(1 for g in games.values() if g.get("model") and g.get("final"))
     print(f"{seen} games with odds ({added} new), closing refreshed on {closed}, "
-          f"field spread on {matched}, {len(games)} retained -> {OUT}")
+          f"field spread on {matched}, model logged on {predicted} new "
+          f"({graded} now gradable), {len(games)} retained -> {OUT}")
 
 
 if __name__ == "__main__":
