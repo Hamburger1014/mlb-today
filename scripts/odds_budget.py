@@ -33,6 +33,7 @@ from datetime import datetime, timezone
 # response has been seen yet this month.
 MONTHLY_CAP = 420
 RESERVE = 60               # never spend the last of the tank; leave it for the page
+PROBE_H = 3.0              # how stale an "empty" reading gets before we re-check
 
 # sport -> (slow hours, near-kickoff hours, fast minutes)
 # Sized so the THROTTLE alone lands under MONTHLY_CAP (~360/month), leaving the
@@ -69,7 +70,23 @@ def spend_ok(store, sport, starts=()):
     rem = ledger.get("remaining")
     if rem is not None:
         if rem <= RESERVE:
-            return False
+            # DEADLOCK GUARD. Refusing on an empty reading means never fetching,
+            # and never fetching means never learning the tank refilled. A month
+            # rollover clears the ledger so the monthly reset recovers on its
+            # own — but a mid-month UPGRADE does not, and that is precisely what
+            # happened on 2026-08-26: the tier went to 20,000 credits while this
+            # sat at remaining 0 and would have stayed blind indefinitely. Let a
+            # stale "empty" spend one credit to re-check.
+            try:
+                age_h = (now - datetime.fromisoformat(ledger["checkedAt"])).total_seconds() / 3600.0
+            except Exception:
+                age_h = 1e9
+            if age_h < PROBE_H:
+                return False
+            stamps = store.setdefault("oddsFetchedAt", {})
+            stamps[sport] = now.isoformat(timespec="seconds")
+            ledger["used"] = ledger.get("used", 0) + 1
+            return True     # a probe: one call to find out whether it refilled
     elif ledger.get("used", 0) >= MONTHLY_CAP:
         return False
 
