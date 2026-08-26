@@ -19,6 +19,10 @@ import importlib.util
 import json, math, os, urllib.request
 from datetime import datetime, timedelta, timezone
 
+_ob = importlib.util.spec_from_file_location(
+    "odds_budget", os.path.join(os.path.dirname(os.path.abspath(__file__)), "odds_budget.py"))
+OB = importlib.util.module_from_spec(_ob); _ob.loader.exec_module(OB)
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 OUT  = os.path.join(ROOT, "data", "football_lines.json")
@@ -117,7 +121,7 @@ def norm_name(s):
     return "".join(ch for ch in (s or "").lower() if ch.isalnum())
 
 
-def field_spreads(league):
+def field_spreads(league, store=None, starts=()):
     """Every OTHER book's spread number for each game, plus DraftKings' own.
 
     ESPN relays DraftKings alone, so the log has never recorded what the rest of
@@ -133,6 +137,8 @@ def field_spreads(league):
     sport = ODDS_SPORT.get(league)
     if not sport:
         return out
+    if store is not None and not OB.spend_ok(store, sport, starts):
+        return out          # inside the budget window; keep yesterday's numbers
     try:
         d = get(f"{ODDS_PROXY}/?odds={sport}&markets=spreads")
     except Exception as e:
@@ -239,7 +245,8 @@ def main():
         except Exception as e:
             print(f"  ! {league}: {e}")
             continue
-        fld = field_spreads(league)
+        fld = field_spreads(league, store,
+                            [e.get("date") for e in evs])
         for ev in evs:
             c = (ev.get("competitions") or [{}])[0]
             state = ((c.get("status") or {}).get("type") or {}).get("name", "")
@@ -257,11 +264,25 @@ def main():
             hit = pick_by_time(fld.get(
                 norm_name((home.get("team") or {}).get("displayName")) + "|" +
                 norm_name((away.get("team") or {}).get("displayName"))), ev.get("date"))
+            # Look the previous entry up by id. `g` is not assigned until a
+            # few lines below, so reading it here would silently hand this game
+            # the PREVIOUS game's field spread on every iteration after the
+            # first.
+            _prev = (games.get(str(ev["id"])) or {}).get("closing") or {}
             if hit and hit.get("fieldSp") is not None:
                 snap["fieldSp"] = hit["fieldSp"]
                 snap["fieldN"] = hit["fieldN"]
                 snap["dkSpOdds"] = hit.get("dkSp")   # cross-check against ESPN's
                 matched += 1
+            elif _prev.get("fieldSp") is not None:
+                # Throttled run: no fresh field number. `closing` is rebuilt from
+                # scratch each pass, so without carrying the last one forward the
+                # budget fix would ERASE the data it exists to protect — a field
+                # spread is not backfillable.
+                snap["fieldSp"] = _prev["fieldSp"]
+                snap["fieldN"] = _prev.get("fieldN")
+                snap["dkSpOdds"] = _prev.get("dkSpOdds")
+                snap["fieldStale"] = True
             seen += 1
             gid = str(ev["id"])
             g = games.get(gid)
@@ -315,7 +336,7 @@ def main():
     graded = sum(1 for g in games.values() if g.get("model") and g.get("final"))
     print(f"{seen} games with odds ({added} new), closing refreshed on {closed}, "
           f"field spread on {matched}, model logged on {predicted} new "
-          f"({graded} now gradable), {len(games)} retained -> {OUT}")
+          f"({graded} now gradable), {len(games)} retained | {OB.summary(store)} -> {OUT}")
 
 
 if __name__ == "__main__":

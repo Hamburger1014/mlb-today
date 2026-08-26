@@ -26,8 +26,13 @@ Sources:
                which it did not in June, so no per-game summary fan-out)
   WNBA         data/wnba_predictions.json (model prob + vegas + spread)
 """
+import importlib.util
 import json, math, os, sys, urllib.request
 from datetime import datetime, timedelta, timezone
+
+_ob = importlib.util.spec_from_file_location(
+    "odds_budget", os.path.join(os.path.dirname(os.path.abspath(__file__)), "odds_budget.py"))
+OB = importlib.util.module_from_spec(_ob); _ob.loader.exec_module(OB)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -113,7 +118,7 @@ def breakeven_american(p):
 ODDS_PROXY = "https://mlb-kalshi.gabrielhiginio2005.workers.dev"
 
 
-def sharp_reference(sport="mlb"):
+def sharp_reference(sport="mlb", store=None, starts=()):
     """The field's price, DraftKings EXCLUDED, plus DraftKings on its own.
 
     Read through the same Cloudflare Worker the page uses, so the API key stays
@@ -124,6 +129,8 @@ def sharp_reference(sport="mlb"):
     including it drags every gap toward zero in proportion to its weight.
     """
     out = {}
+    if store is not None and not OB.spend_ok(store, sport, starts):
+        return out, None      # inside the budget window
     try:
         d = get(f"{ODDS_PROXY}/?odds={sport}")
     except Exception as e:
@@ -257,7 +264,7 @@ def norm_pair(a, b):
 
 # ── candidate generation (mirrors cardCandidates() in the page) ───────
 
-def candidates():
+def candidates(store=None):
     out = []
 
     def add(league, gid, id_src, home, away, start, side_home, p_fair, p_price,
@@ -287,7 +294,10 @@ def candidates():
     # Fair is the consensus with DraftKings EXCLUDED; price is the VIGGED
     # DraftKings number, because that is what gets charged. No exchange fee is
     # subtracted — a sportsbook's cost is the vig, already inside the price.
-    sharp, _ = sharp_reference("mlb")
+    # Pass the store so the throttle can persist its timestamp, and today's
+    # start times so it tightens up near first pitch.
+    sharp, _ = sharp_reference("mlb", store,
+                               [g.get("start") for g in (dk_mlb() or {}).values()])
     if sharp:
         for _key, dkg in dk_mlb().items():
             ref = pick_by_time(
@@ -487,7 +497,7 @@ def main():
 
     now = datetime.now(timezone.utc)
     added = 0
-    for c in candidates():
+    for c in candidates(store):
         units = c["stakeCapped"] / CARD_UNIT
         if units < 0.05:
             continue                      # capped out — the card shows "no room", not advice
@@ -532,7 +542,7 @@ def main():
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     json.dump(store, open(OUT, "w"), separators=(",", ":"))
     s = store["summary"]
-    print(f"card: +{added} advised, {graded} newly graded | {s['w']}-{s['l']} "
+    print(f"[{OB.summary(store)}] card: +{added} advised, {graded} newly graded | {s['w']}-{s['l']} "
           f"{s['won']:+.2f}u on {s['staked']:.1f}u staked | {s['pending']} pending -> {OUT}")
 
 
