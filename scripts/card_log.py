@@ -132,7 +132,7 @@ def sharp_reference(sport="mlb", store=None, starts=()):
     if store is not None and not OB.spend_ok(store, sport, starts):
         return out, None      # inside the budget window
     try:
-        d = get(f"{ODDS_PROXY}/?odds={sport}")
+        d = OB.fetch_json(f"{ODDS_PROXY}/?odds={sport}", store)
     except Exception as e:
         print(f"  ! sharp odds ({sport}): {e}")
         return out, None

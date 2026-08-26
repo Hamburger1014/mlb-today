@@ -140,7 +140,7 @@ def field_spreads(league, store=None, starts=()):
     if store is not None and not OB.spend_ok(store, sport, starts):
         return out          # inside the budget window; keep yesterday's numbers
     try:
-        d = get(f"{ODDS_PROXY}/?odds={sport}&markets=spreads")
+        d = OB.fetch_json(f"{ODDS_PROXY}/?odds={sport}&markets=spreads", store)
     except Exception as e:
         print(f"  ! field spreads ({sport}): {e}")
         return out

@@ -40,6 +40,8 @@ const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type',
+  // Without this a browser fetch can see the body but not the quota headers.
+  'Access-Control-Expose-Headers': 'x-requests-remaining, x-requests-used, x-requests-last, x-proxy-cache',
 };
 
 // ── Kalshi RSA-PSS request signing (only used if the secrets are configured) ──
@@ -114,9 +116,19 @@ async function cachedProxy(keyStr, upstreamUrl, ctx, freshS, extraHeaders) {
 
   if (up && up.ok) {
     const body = await up.text();
+    // Forward the Odds API's own quota headers. Without them a caller cannot
+    // tell how many credits are left and has to guess with a hardcoded ceiling —
+    // which is how this key ran dry on 2026-08-26 while every panel reported
+    // "no plays". Cached alongside the body so a cache hit reports the same
+    // figures the fetch saw.
+    const q = {};
+    for (const h of ['x-requests-remaining', 'x-requests-used', 'x-requests-last']) {
+      const v = up.headers.get(h);
+      if (v != null) q[h] = v;
+    }
     const resp = new Response(body, {
       status: 200,
-      headers: { 'Content-Type': 'application/json', 'x-fetched-at': String(Date.now()), 'Cache-Control': 'public, max-age=' + STALE_S },
+      headers: { 'Content-Type': 'application/json', 'x-fetched-at': String(Date.now()), 'Cache-Control': 'public, max-age=' + STALE_S, ...q },
     });
     ctx.waitUntil(cache.put(cacheKey, resp.clone()));
     return withCors(resp, 'miss');
@@ -125,7 +137,16 @@ async function cachedProxy(keyStr, upstreamUrl, ctx, freshS, extraHeaders) {
   if (hit) return withCors(hit, 'stale');
   const status = up ? up.status : 502;
   const body = up ? await up.text() : '{"error":"upstream unreachable"}';
-  return withCors(new Response(body, { status, headers: { 'Content-Type': 'application/json' } }), 'error');
+  // Quota headers matter most on the error path — a 401 for OUT_OF_USAGE_CREDITS
+  // is exactly when a caller needs to know the number is zero.
+  const eh = { 'Content-Type': 'application/json' };
+  if (up) {
+    for (const h of ['x-requests-remaining', 'x-requests-used', 'x-requests-last']) {
+      const v = up.headers.get(h);
+      if (v != null) eh[h] = v;
+    }
+  }
+  return withCors(new Response(body, { status, headers: eh }), 'error');
 }
 
 // ── SCHEDULED: kick the GitHub Actions logger ────────────────────────────────

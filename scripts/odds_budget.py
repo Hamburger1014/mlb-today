@@ -23,9 +23,16 @@ week and carries the best-resolving model on the site; MLB's model is refuted,
 contributes nothing to the card, and needs the field reference least.
 """
 import json
+import urllib.request
 from datetime import datetime, timezone
 
-MONTHLY_CAP = 420          # of 500; the rest is headroom for browser page loads
+# FALLBACK ONLY. The real ceiling is whatever the API says is left — every
+# successful response carries x-requests-remaining, so the budget calibrates
+# itself to the active tier instead of trusting a number someone hand-edited
+# after an upgrade and might forget to change back. This applies when no
+# response has been seen yet this month.
+MONTHLY_CAP = 420
+RESERVE = 60               # never spend the last of the tank; leave it for the page
 
 # sport -> (slow hours, near-kickoff hours, fast minutes)
 # Sized so the THROTTLE alone lands under MONTHLY_CAP (~360/month), leaving the
@@ -57,7 +64,13 @@ def spend_ok(store, sport, starts=()):
     if ledger.get("month") != month:
         ledger.clear()
         ledger.update({"month": month, "used": 0})
-    if ledger.get("used", 0) >= MONTHLY_CAP:
+
+    # Prefer what the API last told us over any local guess.
+    rem = ledger.get("remaining")
+    if rem is not None:
+        if rem <= RESERVE:
+            return False
+    elif ledger.get("used", 0) >= MONTHLY_CAP:
         return False
 
     slow_h, near_h, fast_min = BUDGET.get(sport, DEFAULT)
@@ -88,4 +101,55 @@ def spend_ok(store, sport, starts=()):
 
 def summary(store):
     l = store.get("oddsBudget") or {}
-    return f"odds credits {l.get('used', 0)}/{MONTHLY_CAP} this {l.get('month', '?')}"
+    rem = l.get("remaining")
+    tank = f"{rem} left" if rem is not None else f"cap {MONTHLY_CAP}"
+    return f"odds: {l.get('used', 0)} spent this {l.get('month', '?')}, {tank}"
+
+
+def note_response(store, remaining=None, exhausted=False):
+    """Record what the API reported about the tank.
+
+    `remaining` comes from x-requests-remaining on a successful call; `exhausted`
+    is set when the API answers OUT_OF_USAGE_CREDITS, which is the same fact
+    stated as an error. Either way the next spend_ok() uses the truth rather than
+    a hardcoded ceiling.
+    """
+    ledger = store.setdefault("oddsBudget", {})
+    if exhausted:
+        ledger["remaining"] = 0
+    elif remaining is not None:
+        try:
+            ledger["remaining"] = int(float(remaining))
+        except (TypeError, ValueError):
+            pass
+    ledger["checkedAt"] = _now().isoformat(timespec="seconds")
+
+
+def fetch_json(url, store, timeout=30, tries=3):
+    """GET JSON through the Worker and record the quota it reports.
+
+    Returns (data or None). Callers keep their own error handling; this exists so
+    the credit accounting cannot be forgotten at a call site.
+    """
+    last = None
+    for _ in range(tries):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0",
+                                                       "Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                note_response(store, remaining=r.headers.get("x-requests-remaining"))
+                return json.load(r)
+        except urllib.error.HTTPError as e:
+            body = ""
+            try:
+                body = e.read().decode("utf-8", "replace")[:200]
+            except Exception:
+                pass
+            if e.code == 401 and "OUT_OF_USAGE_CREDITS" in body:
+                note_response(store, exhausted=True)
+                raise RuntimeError("odds api out of credits") from e
+            note_response(store, remaining=e.headers.get("x-requests-remaining"))
+            last = e
+        except Exception as e:
+            last = e
+    raise last
