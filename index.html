@@ -2470,7 +2470,7 @@ async function fetchKalshiMarkets(){ return []; }
    measurement. w = 0 means "the model adds nothing here", which is not an
    opinion — it is what 120 games said. */
 const MARKET_EVIDENCE = {
-  MLBGAME:{bet:false, w:0.00, why:'MEASURED 2026-08-09 on 134 replayed games (scripts/mlb_fullgame_test.py): β_model +0.16 (SE 0.84, z=0.19). Model log-loss 0.6824 vs 0.6728 for the market price; straight-up 58.2% vs the market\'s 60.4% (home base 56.0%). Pooling gains +0.0002 nats — nothing. No evidence of incremental information.'},
+  MLBGAME:{bet:false, w:0.00, why:'MEASURED 2026-08-09 on 134 replayed games (scripts/mlb_fullgame_test.py): beta_model +0.16 (SE 0.84, z=0.19). Model log-loss 0.6824 vs 0.6728 for the market price; straight-up 58.2 percent vs 60.4 percent for the market (home base 56.0 percent). Pooling gains +0.0002 nats. CONFIRMED HARDER 2026-08-26 on 1,369 walk-forward games (scripts/mlb_skill_test.py, analysis/mlb_no_skill.md): the model cannot be shown to beat the CONSTANT 52.3 percent home rate, let alone the market. Log-loss gain +0.00241/game, 95 percent CI [-0.00514,+0.00994], P(better)=0.735; accuracy +2.12pp = 1.57 SE. Refitting the coefficients is WORSE at every L2 tried, so this is the ceiling of the feature set, not a bad fit.'},
   WNBAML: {bet:true,  w:0.15, why:'Unproven, not refuted. 214 backfilled games: β_model +0.35 (p=0.29) with a lookahead injury feature, +0.07 (p=0.87) without it. Live sits between the two, so w is set near the honest end.'},
   WNBASP: {bet:true,  w:0.40, why:'Best segment measured: model ATS 56.5% vs 52.4% break-even (p=0.095), optimal shrink 0.37–0.45. Still unproven — needs ~583 bets for 2σ, so CLV decides it, not P&L.'},
 };
