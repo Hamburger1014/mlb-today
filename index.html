@@ -3192,7 +3192,7 @@ async function fetchSharpOdds(sport='mlb'){
     if(cached && (Date.now()-cached.ts) < ODDS_CACHE_MIN*60000){ SHARP_BY_SPORT[sport]=cached.map; return; }
   }catch(e){}
   try{
-    const r=await fetch(`${ODDS_PROXY}?odds=${encodeURIComponent(sport)}`);
+    const r=await fetch(`${ODDS_PROXY}?odds=${encodeURIComponent(sport)}&regions=us,eu`);
     if(!r.ok){
       // 503 = no key configured yet. Not an error worth shouting about; the
       // page simply has one price source until the secret is set.
@@ -4395,16 +4395,19 @@ async function fetchSharpSpreads(sport){
     if(cached && (Date.now()-cached.ts) < ODDS_CACHE_MIN*60000){ SHARP_SPREADS[sport]=cached.map; return; }
   }catch(e){}
   try{
-    const r=await fetch(`${ODDS_PROXY}?odds=${encodeURIComponent(sport)}&markets=spreads`);
+    const r=await fetch(`${ODDS_PROXY}?odds=${encodeURIComponent(sport)}&markets=spreads&regions=us,eu`);
     if(!r.ok) return;
     const games=await r.json(); const map={};
     for(const g of games){
-      let dk=null; const pts=[], hp=[], ap=[];
+      let dk=null, pin=null; const pts=[], hp=[], ap=[];
       for(const bk of (g.bookmakers||[])){
         const mk=(bk.markets||[]).find(m=>m.key==='spreads'); if(!mk) continue;
         const ho=mk.outcomes.find(o=>o.name===g.home_team), ao=mk.outcomes.find(o=>o.name===g.away_team);
         if(!ho||!ao||ho.point==null) continue;
         if(bk.key==='draftkings'){ dk={line:ho.point, h:_decToAmer(ho.price), a:_decToAmer(ao.price)}; continue; }
+        // Pinnacle is the sharpest number on the board; prefer it over a median
+        // of softer books when it is posting.
+        if(bk.key==='pinnacle') pin={line:ho.point, h:_decToAmer(ho.price), a:_decToAmer(ao.price)};
         pts.push(ho.point); hp.push(_decToAmer(ho.price)); ap.push(_decToAmer(ao.price));
       }
       if(!dk || pts.length<3) continue;
@@ -4413,7 +4416,8 @@ async function fetchSharpSpreads(sport){
       const key=normName(g.home_team)+'|'+normName(g.away_team);
       (map[key]=map[key]||[]).push({
         dkLine:dk.line, dkH:dk.h, dkA:dk.a,
-        fieldLine:med(pts), fH:med(hp), fA:med(ap),
+        fieldLine: pin?pin.line:med(pts), fH: pin?pin.h:med(hp), fA: pin?pin.a:med(ap),
+        isPinnacle: !!pin,
         nBooks:pts.length, commence:Date.parse(g.commence_time),
       });
     }

@@ -227,14 +227,28 @@ export default {
       // passed through: an unbounded `markets` param lets a caller ask for
       // every market at once and drain the free tier (500/month) in a few
       // requests.
+      // Markets and regions are both whitelisted. Cost is (markets x regions)
+      // credits per call, so an unbounded passthrough is a way to empty the tank
+      // in a handful of requests — which already happened once on the free tier.
+      //
+      // ALTERNATE lines were added when the account moved to the paid tier. They
+      // are the whole football thesis: the main line alone cannot show that
+      // DraftKings will sell you +3 at a price the rest of the market says is
+      // worth more, and 15.39% of NFL games land on exactly 3.
       const mkt = url.searchParams.get('markets') || 'h2h';
-      if (!/^(h2h|spreads|totals)$/.test(mkt))
+      if (!/^(h2h|spreads|totals|alternate_spreads|alternate_totals)(,(h2h|spreads|totals|alternate_spreads|alternate_totals))*$/.test(mkt))
         return new Response('unknown market', { status: 400, headers: CORS });
-      // Cached 300s server-side, keyed by sport AND market, so a page refresh
-      // does not spend a credit and spreads does not evict h2h.
+      // eu is where PINNACLE lives, and Pinnacle is the sharpest price available
+      // anywhere. Every measurement on this site so far used a median of US books,
+      // which is a weaker reference than one book that is actually sharp.
+      const reg = url.searchParams.get('regions') || 'us';
+      if (!/^(us|eu|uk|au)(,(us|eu|uk|au))*$/.test(reg))
+        return new Response('unknown region', { status: 400, headers: CORS });
+      // Cached 300s server-side, keyed by sport AND market AND region, so one
+      // combination cannot evict another.
       const u = `${ODDS_BASE}/${sportKey}/odds/?apiKey=${key}`
-              + `&regions=us&markets=${mkt}&oddsFormat=decimal`;
-      return cachedProxy('odds:' + oddsSport + ':' + mkt, u, ctx, 300);
+              + `&regions=${reg}&markets=${mkt}&oddsFormat=decimal`;
+      return cachedProxy('odds:' + oddsSport + ':' + mkt + ':' + reg, u, ctx, 300);
     }
 
     // ── Kalshi public market-data proxy (signed if secrets present) ──

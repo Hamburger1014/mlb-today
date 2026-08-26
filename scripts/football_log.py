@@ -140,7 +140,7 @@ def field_spreads(league, store=None, starts=()):
     if store is not None and not OB.spend_ok(store, sport, starts):
         return out          # inside the budget window; keep yesterday's numbers
     try:
-        d = OB.fetch_json(f"{ODDS_PROXY}/?odds={sport}&markets=spreads", store)
+        d = OB.fetch_json(f"{ODDS_PROXY}/?odds={sport}&markets=spreads&regions=us,eu", store)
     except Exception as e:
         print(f"  ! field spreads ({sport}): {e}")
         return out
@@ -148,6 +148,7 @@ def field_spreads(league, store=None, starts=()):
     saw_spreads = False
     for g in d if isinstance(d, list) else []:
         dk = None
+        pin = None
         others = []
         for bk in g.get("bookmakers", []) or []:
             mk = next((m for m in bk.get("markets", []) if m.get("key") == "spreads"), None)
@@ -159,6 +160,9 @@ def field_spreads(league, store=None, starts=()):
             saw_spreads = True
             if bk.get("key") == "draftkings":
                 dk = ho["point"]
+            elif bk.get("key") == "pinnacle":
+                pin = ho["point"]        # sharper than any median of the rest
+                others.append(ho["point"])
             else:
                 others.append(ho["point"])
         if not others:
@@ -167,8 +171,12 @@ def field_spreads(league, store=None, starts=()):
         n = len(others)
         med = others[n // 2] if n % 2 else (others[n // 2 - 1] + others[n // 2]) / 2
         key = norm_name(g.get("home_team")) + "|" + norm_name(g.get("away_team"))
+        # Prefer Pinnacle's NUMBER when it posts one. A median of soft books is a
+        # weaker statement about where the line belongs, and on 2026-08-26 the
+        # median's best apparent edge halved when re-measured against Pinnacle.
         out.setdefault(key, []).append({
-            "fieldSp": med, "fieldN": n, "dkSp": dk, "commence": g.get("commence_time"),
+            "fieldSp": pin if pin is not None else med, "fieldN": n, "dkSp": dk,
+            "pinSp": pin, "commence": g.get("commence_time"),
         })
 
     if not saw_spreads:
