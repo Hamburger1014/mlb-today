@@ -244,6 +244,20 @@ export default {
       const reg = url.searchParams.get('regions') || 'us';
       if (!/^(us|eu|uk|au)(,(us|eu|uk|au))*$/.test(reg))
         return new Response('unknown region', { status: 400, headers: CORS });
+      // PER-EVENT endpoint. The Odds API only serves alternate lines and props
+      // from /events/{id}/odds, never from the bulk /odds — that is what the 422
+      // "Markets not supported by this endpoint" means. It bills per EVENT rather
+      // than per sport, so a full slate is one credit per game per market-region,
+      // which is why it is gated behind an explicit event id rather than being
+      // something a page refresh can trigger.
+      const evId = url.searchParams.get('event');
+      if (evId) {
+        if (!/^[a-z0-9]{6,64}$/i.test(evId))
+          return new Response('bad event id', { status: 400, headers: CORS });
+        const ue = `${ODDS_BASE}/${sportKey}/events/${evId}/odds/?apiKey=${key}`
+                 + `&regions=${reg}&markets=${mkt}&oddsFormat=decimal`;
+        return cachedProxy('ev:' + oddsSport + ':' + evId + ':' + mkt + ':' + reg, ue, ctx, 300);
+      }
       // Cached 300s server-side, keyed by sport AND market AND region, so one
       // combination cannot evict another.
       const u = `${ODDS_BASE}/${sportKey}/odds/?apiKey=${key}`
