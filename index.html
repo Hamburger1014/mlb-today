@@ -4247,6 +4247,28 @@ function renderFbTrackBar(LG){
   if(logged)
     h+='<span class="track-stat" style="color:var(--dim2)" title="Opening and closing DraftKings lines captured by a scheduled job">&#x1F310; '
       +logged+' games line-logged</span>';
+  // Football's log is REFRESH-based, not append-based: `closing` is rewritten
+  // every run, so "newest game date" is always in the future and says nothing.
+  // The health signal is how long since the job last wrote — which is what goes
+  // quiet if the Cloudflare dispatch token expires, or GitHub stops firing the
+  // way it did for six days in August.
+  const lastWrite=(()=>{
+    let best=null;
+    for(const g of Object.values(lines||{})){
+      const t=Date.parse(((g||{}).closing||{}).at||'');
+      if(isFinite(t) && (best==null || t>best)) best=t;
+    }
+    return best;
+  })();
+  if(lastWrite!=null){
+    const hrs=(Date.now()-lastWrite)/3600000;
+    if(hrs>=3){
+      const col=hrs>=12?'#f87171':'#fbbf24';
+      h+='<span class="track-stat" style="color:'+col+'" '
+        +'title="The line capture job has not written in a while. Check the Actions log and the Cloudflare cron token.">'
+        +'&#x26A0; lines last captured '+(hrs>=24?(hrs/24).toFixed(1)+'d':hrs.toFixed(1)+'h')+' ago</span>';
+    }
+  }
   el.innerHTML=h;
 }
 // Model-free candidates: the field's de-vigged fair price against the price
