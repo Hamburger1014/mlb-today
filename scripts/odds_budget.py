@@ -65,7 +65,11 @@ BUDGET = {
     "mlb":   (24.0, 2.0, 120.0),   # refuted model, contributes nothing to the card
     "nfl":   (4.0,  6.0,  20.0),
     "ncaaf": (4.0,  6.0,  20.0),   # opens 2026-08-29, best-resolving model here
-    "wnba":  (24.0, 2.0, 120.0),
+    # Tightened 2026-08-27 when WNBA gained a second price source. A
+    # cross-book gap is only real if BOTH quotes are current: the card
+    # already suppresses cross-book above 35 minutes old, so a 24h slow
+    # cadence would have produced a feed the card then refused to use.
+    "wnba":  (4.0,  6.0,  20.0),
 }
 DEFAULT = (12.0, 2.0, 120.0)
 

@@ -38,7 +38,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 OUT  = os.path.join(ROOT, "data", "card_log.json")
 sys.path.insert(0, HERE)
-from wnba_log import FIT, norm_cdf, sigmoid, ml_to_raw          # one model copy, reused
+from wnba_log import FIT, norm_cdf, sigmoid, ml_to_raw, TEAMS   # one model copy, reused
+
+# The log stores abbreviations (GS, NY); the odds feed knows only full names
+# ("Golden State Valkyries"). Reuse wnba_log's own table rather than a second
+# hand-typed map - a name mismatch here does not error, it silently drops the
+# game, which is how four of fifteen MLB games once vanished from this join.
+WNBA_FULL = {ab: nm for ab, (_tid, nm) in TEAMS.items()}
 
 # ── constants — keep identical to index.html ──────────────────────────
 CARD_UNIT          = 0.01
@@ -322,27 +328,64 @@ def candidates(store=None):
             entries = json.load(open(wp)).get("entries", [])
         except Exception:
             entries = []
+        # One fetch for the whole slate, not one per game. Pass the ungraded
+        # games' tip times so the budget throttle tightens as tip approaches.
+        _live = [x for x in entries if not x.get("result")]
+        wnba_sharp = {}
+        if _live:
+            wnba_sharp, _ = sharp_reference("wnba", store,
+                                            [x.get("gameDate") for x in _live])
         for e in entries:
             if e.get("result"):
                 continue
-            v, sp = e.get("vegas"), e.get("spread")
-            kg = None                      # no second source; see second_source()
+            # THE FRESHEST DraftKings price, not the opening one. `vegas` is
+            # written once at first sight and never updated; `closing.vegas` is
+            # overwritten every run while the game is pregame. Pricing a LIVE
+            # sharp quote against a stale open manufactures an edge out of the
+            # market's own movement - measured here on 2026-08-27, the open put
+            # Washington at -142 and the current price at -170, which turned a
+            # real +1.56pp into a fake +5.84pp. Same artifact class as the
+            # in-progress-game mispricing already recorded in this repo.
+            _clo = e.get("closing") or {}
+            v = _clo.get("vegas") or e.get("vegas")
+            sp = _clo.get("spread") or e.get("spread")
             gid, home, away = e["id"], e["home"], e["away"]
             start = e.get("gameDate")
             dv = devig_power([ml_to_raw(v["homeML"]), ml_to_raw(v["awayML"])]) if v else None
             bk = dv[0] if dv else None
-            # cross-book
-            if False and bk is not None and kg is not None:   # WNBA sharp feed pending
-                for side_home in (True, False):
-                    kp = kg if side_home else 1 - kg
-                    bp = bk if side_home else 1 - bk
-                    amer = (v["homeML"] if side_home else v["awayML"])
-                    if bp > kp:
-                        add("WNBA", gid, "espn", home, away, start, side_home, bp, kp,
-                            "CROSS", "Kalshi cheap vs book")
-                    elif kp > bp:
-                        add("WNBA", gid, "espn", home, away, start, side_home, kp, bp,
-                            "CROSS", "Book cheap vs Kalshi", amer)
+            # SECOND PRICE SOURCE, restored 2026-08-27. Kalshi was the original
+            # one and was removed in 42c5ab0, which left this branch disabled and
+            # the card unable to find any model-free edge at all. The replacement
+            # is the same Odds API feed MLB already prices against: ~25 books
+            # including Pinnacle and two exchanges, DraftKings deliberately
+            # excluded from the consensus it is judged against.
+            #
+            # Kind is BOOK, not CROSS, and that is deliberate: CROSS subtracts an
+            # exchange fee, and there is no exchange here - a sportsbook's cost is
+            # the vig, already inside the price. Identical treatment to MLB above.
+            ref = pick_by_time(
+                wnba_sharp.get(norm_name(WNBA_FULL.get(home)) + "|" +
+                               norm_name(WNBA_FULL.get(away))), start) if wnba_sharp else None
+            # Both quotes must be current. The sharp side is fetched this run, so
+            # only the book side can be stale; if the log has not refreshed
+            # `closing` recently, refuse rather than compare across time.
+            _age_min = None
+            if _clo.get("at"):
+                try:
+                    _age_min = (datetime.now(timezone.utc) -
+                                datetime.fromisoformat(_clo["at"])).total_seconds() / 60.0
+                except Exception:
+                    _age_min = None
+            if ref and bk is not None and _age_min is not None and _age_min <= CARD_MAX_STALE_MIN:
+                f = ref["fairHome"]
+                note = ("Pinnacle" if ref["pinnacle"] else f"{ref['nBooks']}-book") + " vs DraftKings"
+                raw_h, raw_a = ml_to_raw(v["homeML"]), ml_to_raw(v["awayML"])
+                if f > raw_h:
+                    add("WNBA", gid, "espn", home, away, start, True, f, raw_h,
+                        "BOOK", note, v["homeML"])
+                if (1 - f) > raw_a:
+                    add("WNBA", gid, "espn", home, away, start, False, 1 - f, raw_a,
+                        "BOOK", note, v["awayML"])
             # model — moneyline
             pm = (e.get("model") or {}).get("game")
             if pm is not None and bk is not None:
