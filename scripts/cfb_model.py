@@ -145,6 +145,20 @@ def main():
     _hold = max(g["season"] for g in _pre)
     _fit_on = [g for g in _pre if g["season"] < _hold]
     _score = [g for g in _pre if g["season"] == _hold]
+    # NFL had a real bug here and CHECKED CLEAN for college — the difference is
+    # season size. Holding out the most recent season leaves _fit_on with one
+    # season in both sports, but that is 286 games in the NFL and ~911 here, so
+    # college builds its holdout ratings on 3x the data and does not starve.
+    # Measured on 3,660 walk-forward games (scripts/cfb_skill_test.py): the
+    # converged scale is 11.99 against the shipped 11.709, worth +0.00043
+    # log-loss/game with 95% CI [-0.00081, +0.00164] — indistinguishable. The
+    # NFL gap was 16.14 vs 12.40 and highly significant. So SEASONS stays at 3.
+    # The guard exists so a future narrowing cannot reintroduce it silently.
+    _nseas = len({g["season"] for g in _fit_on})
+    if _fit_on and len(_fit_on) < 800:
+        print(f"  ! WARNING: scale is being fitted against ratings from only "
+              f"{len(_fit_on)} games ({_nseas} season(s)); it will come out too "
+              f"wide. Widen SEASONS. See analysis/cfb_skill.md.")
     _m0 = NM.fit(_fit_on if _fit_on else _pre)
     _mar, _ys = [], []
     for g in (_score if _fit_on else _pre):

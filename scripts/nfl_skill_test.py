@@ -81,7 +81,11 @@ def margins_for(model, rows):
     return mg, ys
 
 
-def walk_forward(games, test_from):
+def walk_forward(games, test_from, ref_scale=None, min_prior=400):
+    """ref_scale is the incumbent constant to compare against (NFL's old 16.14,
+    CFB's shipped 11.709). min_prior is how many games must exist before a slate
+    is scored at all."""
+    ref_scale = PRE_FIX_SCALE if ref_scale is None else ref_scale
     games = sorted(games, key=lambda g: g["date"])
     dates = sorted({g["date"][:10] for g in games if g["season"] >= test_from})
     P = {k: [] for k in ("base", "hfa_only", "oos", "insample", "shipped")}
@@ -91,7 +95,7 @@ def walk_forward(games, test_from):
         dn = NM.day_number(d + "T00:00Z")
         prior = [g for g in games if NM.day_number(g["date"]) < dn]
         today = [g for g in games if g["date"][:10] == d and g["hs"] != g["as"]]
-        if len(prior) < 400 or not today:
+        if len(prior) < min_prior or not today:
             continue
         model = NM.fit(prior, asof=dn)
 
@@ -106,7 +110,7 @@ def walk_forward(games, test_from):
             fit_on = [g for g in games if g["season"] < hold]
             score = [g for g in games if g["season"] == hold]
             _scale_cache[season] = (fit_scale(*margins_for(NM.fit(fit_on), score))
-                                    if fit_on and score else PRE_FIX_SCALE)
+                                    if fit_on and score else ref_scale)
         sc_oos = _scale_cache[season]
         sc_in = fit_scale(*margins_for(model, prior))   # biased, for contrast
 
@@ -120,7 +124,7 @@ def walk_forward(games, test_from):
             P["hfa_only"].append(sig(model["hfa"] / sc_oos))
             P["oos"].append(sig(mg / sc_oos))
             P["insample"].append(sig(mg / sc_in))
-            P["shipped"].append(sig(mg / PRE_FIX_SCALE))
+            P["shipped"].append(sig(mg / ref_scale))
             Y.append(1 if g["hs"] > g["as"] else 0)
             MARG.append(mg); ACT.append(g["hs"] - g["as"])
         SC.append((d, sc_oos, sc_in, model["hfa"]))
