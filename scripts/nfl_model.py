@@ -46,7 +46,18 @@ ROOT = os.path.dirname(HERE)
 OUT = os.path.join(ROOT, "data", "nfl_model.json")
 BASE = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard"
 
-SEASONS = [2023, 2024, 2025]
+# WAS [2023, 2024, 2025]. The scale fit below holds out the most recent training
+# season, so a 3-season list leaves _fit_on with exactly ONE season (2023) to
+# build ratings from. Ratings off one season are weak, weak ratings separate
+# teams poorly, and the optimiser answers that with a scale far too WIDE — 16.14
+# where the converged value is 12.26. Measured on 1,693 walk-forward games
+# (scripts/nfl_skill_test.py): 12.26 beats 16.14 by +0.00688 log-loss/game,
+# 95% CI [+0.00350, +0.01017], and halves the calibration error (reliability
+# 0.0031 vs 0.0053). Depth beyond this changes nothing — _fit_on of 4 seasons
+# gives 12.28, of 6 gives 12.26 — because HALF_LIFE_DAYS already decays a
+# 3-season-old game to ~3% weight. The list is long so _fit_on is never starved,
+# not because old seasons matter.
+SEASONS = list(range(2018, 2026))
 TEST_SEASON = 2025          # held out for walk-forward scoring
 HALF_LIFE_DAYS = 220.0      # ~1.3 seasons; a full prior year still counts, faintly
 # Chosen by tuning on 2024 (fit 2023 only) and confirmed on an untouched 2025,
@@ -60,6 +71,9 @@ HALF_LIFE_DAYS = 220.0      # ~1.3 seasons; a full prior year still counts, fain
 # shoulder rather than its tip — 32 teams and thin early-season data make the
 # less aggressive end the safer place to stand.
 RIDGE = 3.0
+
+# All-star squads ESPN reports as teams. Never real franchises.
+NON_TEAMS = {"AFC", "NFC"}
 
 
 def get(url, tries=3):
@@ -92,6 +106,16 @@ def fetch_games():
                     home = next((t for t in c.get("competitors", []) if t.get("homeAway") == "home"), None)
                     away = next((t for t in c.get("competitors", []) if t.get("homeAway") == "away"), None)
                     if not home or not away:
+                        continue
+                    # The Pro Bowl arrives in seasontype 3 as a real final with
+                    # AFC and NFC as the "franchises". It is not football: since
+                    # 2023 it is a flag-football exhibition, and the seven in
+                    # this range average 44.9 points a side against 23.0 for real
+                    # games. Worse, it is played in February, so it is the most
+                    # RECENT game in the set and recency weighting hands it the
+                    # single largest weight of any row. It skews mu and the
+                    # quarter tables, and registers two teams that never play again.
+                    if {home["team"]["abbreviation"], away["team"]["abbreviation"]} & NON_TEAMS:
                         continue
 
                     def lines(t):
@@ -316,6 +340,12 @@ def main():
     _hold = max(g["season"] for g in pre)
     _fit_on = [g for g in pre if g["season"] < _hold]
     _score = [g for g in pre if g["season"] == _hold]
+    # _fit_on must be about as deep as the FINAL fit, or the scale is calibrated
+    # for ratings weaker than the ones that will actually use it. See SEASONS.
+    _nseas = len({g["season"] for g in _fit_on})
+    if _nseas < 3:
+        print(f"  ! WARNING: scale is being fitted against ratings built from only "
+              f"{_nseas} season(s); it will come out too wide. Widen SEASONS.")
     _m = fit(_fit_on if _fit_on else pre)
     _mar, _ys = [], []
     for g in (_score if _fit_on else pre):
