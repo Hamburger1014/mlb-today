@@ -413,6 +413,15 @@
       font-size:.95rem;font-weight:600;padding:12px 20px;cursor:pointer}
     .nav-item:hover{background:var(--card2)}
     .nav-item.active{background:rgba(96,165,250,.15);color:#93c5fd;border-left:3px solid #60a5fa}
+    /* The six items above switch an in-app view. This one navigates AWAY, so it
+       is set apart rather than sitting in the same list unmarked - quieter
+       weight, its own group, and an explicit outbound arrow. It carries no
+       data-view, so switchView's active-toggle simply never matches it. */
+    .nav-sep{height:1px;background:var(--border);margin:10px 20px}
+    a.nav-item{text-decoration:none;font-weight:500;color:var(--dim);display:flex;
+      align-items:center;justify-content:space-between;gap:8px}
+    a.nav-item:hover{color:var(--text)}
+    a.nav-item .ext{font-size:.8rem;color:var(--dim2)}
     /* ── Quarter grid + the shared prediction-log strip ──
        The track bar used to be WNBA-only. It is the piece that made that view
        readable — what the log has actually done, in one line, above the picks —
@@ -601,6 +610,10 @@
   <button class="nav-item" data-view="nfl" onclick="switchView('nfl')">🏈 NFL</button>
   <button class="nav-item" data-view="cfb" onclick="switchView('cfb')">🏈 College FB</button>
   <button class="nav-item" data-view="fv" onclick="switchView('fv')">📋 Fair Value</button>
+  <div class="nav-sep"></div>
+  <div class="nav-head">Evidence</div>
+  <a class="nav-item" href="analysis/skill_tests.html" target="_blank" rel="noopener"
+     onclick="toggleMenu()">📊 Model skill tests <span class="ext" aria-hidden="true">&#8599;</span></a>
 </nav>
 
 <!-- Legend is a native <details>: collapsed by default so the first game card sits
