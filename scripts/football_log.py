@@ -108,13 +108,28 @@ def num(v):
         return None
 
 
-def scoreboard(path):
-    """Current slate; out of season the default is empty, so look 30 days out."""
-    evs = get(f"{BASE}{path}/scoreboard?limit=200").get("events", []) or []
-    if not any((e.get("competitions") or [{}])[0].get("odds") for e in evs):
-        d0 = datetime.now(timezone.utc).strftime("%Y%m%d")
-        d1 = (datetime.now(timezone.utc) + timedelta(days=30)).strftime("%Y%m%d")
-        evs = get(f"{BASE}{path}/scoreboard?limit=200&dates={d0}-{d1}").get("events", []) or []
+def scoreboard(path, back_days=3, fwd_days=10):
+    """Always query an EXPLICIT date window. Never trust the default scoreboard.
+
+    ESPN's default is WEEK-SCOPED and it rolls forward early. On 2026-08-27 the
+    college default already showed Week 1 (Sep 4-7) and returned exactly ONE of
+    the seven games kicking off Saturday Aug 29 — college calls late-August games
+    "Week 0", and the default had moved past them two days before they kicked.
+
+    The old code only fell back to a date range when NO event carried odds. These
+    carried odds — the wrong week's — so the fallback never fired and six of seven
+    games were invisible, with no error. A closing line is not backfillable, so
+    that would have silently lost most of opening Saturday.
+
+    The window reaches BACKWARD as well: finals are graded off this same feed, so
+    a forward-only window would drop yesterday's games before they were graded.
+    """
+    now = datetime.now(timezone.utc)
+    d0 = (now - timedelta(days=back_days)).strftime("%Y%m%d")
+    d1 = (now + timedelta(days=fwd_days)).strftime("%Y%m%d")
+    evs = get(f"{BASE}{path}/scoreboard?limit=300&dates={d0}-{d1}").get("events", []) or []
+    if not evs:                       # deep offseason: fall back to whatever it has
+        evs = get(f"{BASE}{path}/scoreboard?limit=200").get("events", []) or []
     return evs
 
 
