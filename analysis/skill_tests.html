@@ -1,0 +1,434 @@
+<title>Four Models Against a Constant</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:wght@500;600&display=swap">
+<style>
+  :root{
+    --ground:#F7F8FA; --surface:#FFFFFF; --sunk:#EFF2F6;
+    --ink:#161B22; --ink-2:#3D4756; --ink-3:#6B7686;
+    --rule:#DCE1E8; --rule-2:#C3CAD4;
+    --accent:#0E7C86; --accent-soft:#DCEFF1; --accent-ink:#0A5B63;
+    --null:#78828F; --null-soft:#E6E9ED;
+    --caution:#946A1E; --caution-soft:#F7EFDD; --caution-rule:#E0CDA4;
+    --shadow:0 1px 2px rgba(22,27,34,.05),0 8px 24px -12px rgba(22,27,34,.15);
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --ground:#0E1116; --surface:#161B22; --sunk:#1C222B;
+      --ink:#E6EAF0; --ink-2:#AFB8C4; --ink-3:#7C8794;
+      --rule:#262D38; --rule-2:#39424F;
+      --accent:#3FB4BE; --accent-soft:#0F2A2D; --accent-ink:#6FD3DB;
+      --null:#78828F; --null-soft:#232A34;
+      --caution:#D2A75A; --caution-soft:#2A2318; --caution-rule:#4A3D25;
+      --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -12px rgba(0,0,0,.6);
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#0E1116; --surface:#161B22; --sunk:#1C222B;
+    --ink:#E6EAF0; --ink-2:#AFB8C4; --ink-3:#7C8794;
+    --rule:#262D38; --rule-2:#39424F;
+    --accent:#3FB4BE; --accent-soft:#0F2A2D; --accent-ink:#6FD3DB;
+    --null:#78828F; --null-soft:#232A34;
+    --caution:#D2A75A; --caution-soft:#2A2318; --caution-rule:#4A3D25;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -12px rgba(0,0,0,.6);
+  }
+
+  *{box-sizing:border-box}
+  body{
+    background:var(--ground); color:var(--ink);
+    font-family:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+    font-size:16px; line-height:1.6; margin:0;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1120px; margin:0 auto; padding:0 24px}
+  .col{max-width:660px}
+  h1,h2,h3{font-family:"IBM Plex Serif",Georgia,serif; text-wrap:balance; margin:0}
+  .eyebrow{
+    font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11px; font-weight:500;
+    letter-spacing:.14em; text-transform:uppercase; color:var(--ink-3);
+  }
+
+  header{border-bottom:1px solid var(--rule); background:var(--surface)}
+  .head-in{display:flex; flex-direction:column; gap:20px; padding:56px 0 40px}
+  h1{font-size:clamp(30px,4.4vw,46px); line-height:1.12; font-weight:600; letter-spacing:-.015em}
+  .standfirst{font-size:18px; line-height:1.55; color:var(--ink-2); max-width:600px; margin:0}
+  .meta{
+    display:flex; flex-wrap:wrap; gap:8px 28px; padding-top:6px;
+    font-family:"IBM Plex Mono",monospace; font-size:12px; color:var(--ink-3);
+  }
+  .meta b{color:var(--ink-2); font-weight:500}
+
+  main{padding:0 0 88px}
+  section{padding:52px 0 0}
+  h2{font-size:24px; font-weight:600; letter-spacing:-.01em}
+  h3{font-size:17px; font-weight:600}
+  p{margin:0 0 14px}
+  .lede{color:var(--ink-2)}
+  .sec-head{display:flex; flex-direction:column; gap:5px; margin-bottom:22px}
+  .sec-head p{margin:4px 0 0}
+
+  .plot{
+    background:var(--surface); border:1px solid var(--rule); border-radius:4px;
+    box-shadow:var(--shadow); padding:28px 30px 22px; margin:26px 0 10px;
+  }
+  .plot-head{display:flex; justify-content:space-between; align-items:baseline; gap:16px; flex-wrap:wrap; margin-bottom:26px}
+  .plot-scroll{overflow-x:auto}
+  .plot-body{min-width:620px}
+  .frow{display:grid; grid-template-columns:104px 1fr 168px; align-items:center; gap:18px; padding:11px 0}
+  .frow + .frow{border-top:1px solid var(--rule)}
+  .fname{display:flex; flex-direction:column; gap:1px}
+  .fname .sport{font-weight:600; font-size:15px; letter-spacing:.01em}
+  .fname .n{font-family:"IBM Plex Mono",monospace; font-size:11px; color:var(--ink-3)}
+  .track{position:relative; height:34px}
+  .zero{position:absolute; top:-4px; bottom:-4px; width:1px; background:var(--rule-2)}
+  .bar{position:absolute; top:50%; transform:translateY(-50%); height:7px; border-radius:4px}
+  .bar.sig{background:var(--accent); opacity:.28}
+  .bar.null{background:transparent; border:1px dashed var(--null); height:11px}
+  .dot{position:absolute; top:50%; width:11px; height:11px; border-radius:50%; transform:translate(-50%,-50%)}
+  .dot.sig{background:var(--accent); box-shadow:0 0 0 3px var(--accent-soft)}
+  .dot.null{background:var(--ground); border:2px solid var(--null)}
+  .fstat{
+    font-family:"IBM Plex Mono",monospace; font-size:12px; text-align:right;
+    font-variant-numeric:tabular-nums; color:var(--ink-2); line-height:1.45;
+  }
+  .fstat b{display:block; font-size:14px; font-weight:600; color:var(--ink)}
+  .axis{position:relative; height:26px; margin:8px 0 0 122px; border-top:1px solid var(--rule)}
+  .tick{position:absolute; top:0; font-family:"IBM Plex Mono",monospace; font-size:10px; color:var(--ink-3); transform:translateX(-50%); padding-top:6px}
+  .tick::before{content:""; position:absolute; top:0; left:50%; width:1px; height:4px; background:var(--rule-2)}
+  .axis-label{margin:14px 0 0 122px; font-family:"IBM Plex Mono",monospace; font-size:11px; color:var(--ink-3)}
+  .legend{display:flex; gap:22px; flex-wrap:wrap; font-family:"IBM Plex Mono",monospace; font-size:11px; color:var(--ink-3)}
+  .lg{display:flex; align-items:center; gap:7px}
+  .lg i{width:22px; height:7px; border-radius:4px; display:block}
+  .lg i.sig{background:var(--accent); opacity:.35}
+  .lg i.null{border:1px dashed var(--null); height:11px}
+
+  .chip{
+    display:inline-flex; align-items:center; border-radius:3px;
+    font-family:"IBM Plex Mono",monospace; font-size:11px; font-weight:500;
+    letter-spacing:.05em; text-transform:uppercase; padding:3px 8px; white-space:nowrap;
+  }
+  .chip.sig{background:var(--accent-soft); color:var(--accent-ink)}
+  .chip.null{background:var(--null-soft); color:var(--null)}
+
+  .caution{
+    background:var(--caution-soft); border:1px solid var(--caution-rule);
+    border-left:3px solid var(--caution); border-radius:3px;
+    padding:24px 26px; display:flex; flex-direction:column; gap:12px;
+  }
+  .caution .eyebrow{color:var(--caution)}
+  .caution h2{font-size:20px}
+  .caution p{margin:0; color:var(--ink-2); max-width:640px}
+  .caution strong{color:var(--ink); font-weight:600}
+
+  .tscroll{overflow-x:auto; margin:22px 0 0; border:1px solid var(--rule); border-radius:4px; background:var(--surface)}
+  table{border-collapse:collapse; width:100%; min-width:660px; font-size:14px}
+  th,td{padding:11px 16px; text-align:right; border-bottom:1px solid var(--rule)}
+  th:first-child,td:first-child{text-align:left}
+  thead th{
+    font-family:"IBM Plex Mono",monospace; font-size:10.5px; font-weight:500;
+    letter-spacing:.09em; text-transform:uppercase; color:var(--ink-3);
+    background:var(--sunk); border-bottom:1px solid var(--rule-2); white-space:nowrap;
+  }
+  tbody tr:last-child td{border-bottom:none}
+  tbody td:not(:first-child){font-family:"IBM Plex Mono",monospace; font-variant-numeric:tabular-nums}
+  tbody td:first-child{font-weight:600}
+  tr.flat td{color:var(--ink-3)}
+  tr.flat td:first-child{color:var(--ink-2)}
+  .win{color:var(--accent-ink); font-weight:600}
+  .tnote{font-size:14px; color:var(--ink-3); margin-top:12px}
+
+  .cards{display:grid; grid-template-columns:repeat(auto-fit,minmax(268px,1fr)); gap:18px; margin-top:24px}
+  .card{
+    background:var(--surface); border:1px solid var(--rule); border-radius:4px;
+    padding:22px; display:flex; flex-direction:column; gap:11px; box-shadow:var(--shadow);
+  }
+  .card.flat{background:var(--sunk)}
+  .card-top{display:flex; justify-content:space-between; align-items:center; gap:10px}
+  .card h3{font-size:19px}
+  .card p{margin:0; font-size:14.5px; color:var(--ink-2)}
+  .kv{display:flex; flex-direction:column; gap:5px; padding-top:11px; border-top:1px solid var(--rule); margin-top:auto}
+  .kv div{display:flex; justify-content:space-between; gap:12px; font-family:"IBM Plex Mono",monospace; font-size:12px}
+  .kv span:first-child{color:var(--ink-3)}
+  .kv span:last-child{font-variant-numeric:tabular-nums; color:var(--ink); text-align:right}
+
+  .finds{display:flex; flex-direction:column; margin-top:22px}
+  .find{display:grid; grid-template-columns:118px 1fr; gap:22px; padding:20px 0; border-top:1px solid var(--rule)}
+  .find:last-child{border-bottom:1px solid var(--rule)}
+  .find-tag{font-family:"IBM Plex Mono",monospace; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-3); padding-top:3px}
+  .find-body h3{margin-bottom:6px}
+  .find-body p{margin:0 0 8px; color:var(--ink-2); max-width:640px}
+  .find-body p:last-child{margin-bottom:0}
+  code{
+    font-family:"IBM Plex Mono",monospace; font-size:.87em; background:var(--sunk);
+    border:1px solid var(--rule); border-radius:3px; padding:1px 5px; color:var(--ink);
+  }
+  .swing{
+    display:inline-flex; align-items:center; gap:9px; flex-wrap:wrap;
+    font-family:"IBM Plex Mono",monospace; font-size:13px; background:var(--sunk);
+    border:1px solid var(--rule); border-radius:3px; padding:6px 11px;
+    margin:4px 0 10px; font-variant-numeric:tabular-nums;
+  }
+  .swing .from{color:var(--ink-3); text-decoration:line-through; text-decoration-thickness:1px}
+  .swing .to{color:var(--accent-ink); font-weight:600}
+  .swing .arw,.swing .ref{color:var(--ink-3)}
+
+  footer{border-top:1px solid var(--rule); padding:28px 0 40px; margin-top:64px}
+  .foot{display:flex; flex-wrap:wrap; gap:10px 30px; font-family:"IBM Plex Mono",monospace; font-size:12px; color:var(--ink-3)}
+  .foot b{color:var(--ink-2); font-weight:500}
+  :focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+  @media (prefers-reduced-motion:reduce){*{animation:none !important; transition:none !important}}
+  @media (max-width:660px){
+    .frow{grid-template-columns:88px 1fr; row-gap:8px}
+    .fstat{grid-column:1 / -1; text-align:left}
+    .axis,.axis-label{margin-left:0}
+    .find{grid-template-columns:1fr; gap:8px}
+  }
+</style>
+
+<header>
+  <div class="wrap head-in">
+    <div class="eyebrow">Walk-forward skill tests &middot; mlb-today</div>
+    <h1>Four models against a constant</h1>
+    <p class="standfirst">Every model was asked the same weak question: can it beat &ldquo;the home team wins X% of the time&rdquo;? Three cleared it decisively. One cannot be shown to beat home-field advantage alone.</p>
+    <div class="meta">
+      <span><b>Measured</b> 26 Aug 2026</span>
+      <span><b>Method</b> walk-forward, paired bootstrap</span>
+      <span><b>Test games</b> 7,530</span>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <section>
+    <div class="col sec-head">
+      <div class="eyebrow">The result</div>
+      <h2>Log-loss gain over always-home</h2>
+      <p class="lede">Each bar is a 95% confidence interval from a 20,000-resample paired bootstrap on per-game log loss. An interval that touches zero is a model that cannot be distinguished from the constant.</p>
+    </div>
+
+    <div class="plot">
+      <div class="plot-head">
+        <div class="eyebrow">Gain per game &middot; higher is better</div>
+        <div class="legend">
+          <span class="lg"><i class="sig"></i> clears zero</span>
+          <span class="lg"><i class="null"></i> straddles zero</span>
+        </div>
+      </div>
+
+      <div class="plot-scroll"><div class="plot-body">
+        <div class="frow">
+          <div class="fname"><span class="sport">CFB</span><span class="n">n = 3,660</span></div>
+          <div class="track">
+            <div class="zero" style="left:6.67%"></div>
+            <div class="bar sig" style="left:82.15%; right:4.39%"></div>
+            <div class="dot sig" style="left:88.86%"></div>
+          </div>
+          <div class="fstat"><b>+0.12329</b>[+0.11323, +0.13342]</div>
+        </div>
+
+        <div class="frow">
+          <div class="fname"><span class="sport">WNBA</span><span class="n">n = 813</span></div>
+          <div class="track">
+            <div class="zero" style="left:6.67%"></div>
+            <div class="bar sig" style="left:24.76%; right:41.27%"></div>
+            <div class="dot sig" style="left:41.81%"></div>
+          </div>
+          <div class="fstat"><b>+0.05271</b>[+0.02714, +0.07810]</div>
+        </div>
+
+        <div class="frow">
+          <div class="fname"><span class="sport">NFL</span><span class="n">n = 1,688</span></div>
+          <div class="track">
+            <div class="zero" style="left:6.67%"></div>
+            <div class="bar sig" style="left:30.09%; right:55.87%"></div>
+            <div class="dot sig" style="left:37.10%"></div>
+          </div>
+          <div class="fstat"><b>+0.04565</b>[+0.03514, +0.05620]</div>
+        </div>
+
+        <div class="frow">
+          <div class="fname"><span class="sport">MLB</span><span class="n">n = 1,369</span></div>
+          <div class="track">
+            <div class="zero" style="left:6.67%"></div>
+            <div class="bar null" style="left:3.60%; right:86.30%"></div>
+            <div class="dot null" style="left:8.64%"></div>
+          </div>
+          <div class="fstat"><b>+0.00296</b>[&minus;0.00460, +0.01055]</div>
+        </div>
+
+        <div class="axis">
+          <span class="tick" style="left:6.67%">0.00</span>
+          <span class="tick" style="left:26.67%">0.03</span>
+          <span class="tick" style="left:46.67%">0.06</span>
+          <span class="tick" style="left:66.67%">0.09</span>
+          <span class="tick" style="left:86.67%">0.12</span>
+        </div>
+        <div class="axis-label">nats of log loss saved per game, versus predicting the running home-win rate</div>
+      </div></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="caution">
+      <div class="eyebrow">Read this before acting on any of it</div>
+      <h2>Beating a constant is not beating a price</h2>
+      <p>These tests say three models pick games well. They say <strong>nothing</strong> about whether they beat a bookmaker, because the market picks games well too.</p>
+      <p>Card weights are set by the <strong>market tests</strong>, not these ones. WNBA is the only market with any positive signal against a price, and it is <strong>unproven, not proven</strong> &mdash; &beta;<sub>model</sub> +0.35 (p = 0.29) with a lookahead injury feature, +0.07 (p = 0.87) without it. Nothing on this page justifies raising a weight.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="col sec-head">
+      <div class="eyebrow">Side by side</div>
+      <h2>The full table</h2>
+      <p class="lede">Accuracy is against each sport&rsquo;s own base rate, and those differ enormously &mdash; college home advantage alone wins 63% of games.</p>
+    </div>
+
+    <div class="tscroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Model</th><th>Games</th><th>Accuracy</th><th>Base rate</th>
+            <th>Edge</th><th>Significance</th><th>Resolution</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>CFB</td><td>3,660</td><td class="win">72.38%</td><td>63.25%</td><td>+9.13pp</td><td>11.04 SE</td><td>0.0290</td></tr>
+          <tr><td>WNBA</td><td>813</td><td class="win">65.31%</td><td>54.86%</td><td>+10.46pp</td><td>5.96 SE</td><td>0.0176</td></tr>
+          <tr><td>NFL</td><td>1,688</td><td class="win">63.80%</td><td>53.91%</td><td>+9.89pp</td><td>8.13 SE</td><td>0.0173</td></tr>
+          <tr class="flat"><td>MLB</td><td>1,369</td><td>54.42%</td><td>52.30%</td><td>+2.12pp</td><td>1.57 SE</td><td>0.0019</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="col tnote">Resolution is measured against an uncertainty of roughly 0.249. It is how far a model moves off the base rate and is still right &mdash; and MLB&rsquo;s 0.0019 is the number that matters most about it.</p>
+  </section>
+
+  <section>
+    <div class="col sec-head">
+      <div class="eyebrow">Per model</div>
+      <h2>What each test found</h2>
+    </div>
+    <div class="cards">
+
+      <div class="card">
+        <div class="card-top"><h3>CFB</h3><span class="chip sig">Strongest</span></div>
+        <p>The largest gain of the four, roughly 3&times; the NFL&rsquo;s. But its base rate is already 63.25%, so in percentage points the edge matches the others.</p>
+        <div class="kv">
+          <div><span>Scale bug</span><span>checked clean</span></div>
+          <div><span>marginScale</span><span>11.709 kept</span></div>
+          <div><span>Margin error</span><span>13.81 pts</span></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-top"><h3>WNBA</h3><span class="chip sig">Carries the weight</span></div>
+        <p>The only model with money behind it. Held 65.3% across three separate windows &mdash; 2024+, 2025+, and 2026 alone. A floor, not an estimate: no historical injury feed exists.</p>
+        <div class="kv">
+          <div><span>Lookaheads removed</span><span>2</span></div>
+          <div><span>Shipped coefficients</span><span>not overfit</span></div>
+          <div><span>Resolution, live path</span><span>0.0300</span></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-top"><h3>NFL</h3><span class="chip sig">Two bugs fixed</span></div>
+        <p>Real skill, hidden behind a margin scale 30% too wide and a training set that included the Pro Bowl. Both corrected.</p>
+        <div class="kv">
+          <div><span>marginScale</span><span>16.14 &rarr; 12.40</span></div>
+          <div><span>Held-out season</span><span>61.75% &rarr; 63.4%</span></div>
+          <div><span>Margin error</span><span>10.26 pts</span></div>
+        </div>
+      </div>
+
+      <div class="card flat">
+        <div class="card-top"><h3>MLB</h3><span class="chip null">No signal</span></div>
+        <p>Cannot be shown to beat a constant after a full season. Not a tuning problem &mdash; refitting is worse at every regularisation tried, and pythagorean differential alone ties the full five-feature model.</p>
+        <div class="kv">
+          <div><span>P(beats constant)</span><span>0.735</span></div>
+          <div><span>Card weight</span><span>0.00, unchanged</span></div>
+          <div><span>Resolution</span><span>0.0019</span></div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <div class="col sec-head">
+      <div class="eyebrow">What the tests turned up</div>
+      <h2>Findings that changed the code</h2>
+    </div>
+
+    <div class="finds">
+
+      <div class="find">
+        <div class="find-tag">NFL &middot; fixed</div>
+        <div class="find-body">
+          <h3>A margin scale calibrated for a model that wasn&rsquo;t shipping</h3>
+          <p>The scale is fitted out of sample by holding out the most recent training season. With a three-season list that leaves <code>_fit_on</code> holding <em>2023 alone</em> &mdash; 286 games. So the scale was calibrated against ratings built from one season, then applied to a model built from three. Sharper ratings deserve a narrower scale and got the wide one.</p>
+          <div class="swing"><span class="from">16.14</span><span class="arw">&rarr;</span><span class="to">12.40</span></div>
+          <p>The model was underconfident: 65% where it should have said 71% on a 10-point favourite. The fix is <code>SEASONS</code>, not the constant.</p>
+        </div>
+      </div>
+
+      <div class="find">
+        <div class="find-tag">NFL &middot; fixed</div>
+        <div class="find-body">
+          <h3>The Pro Bowl was in the training set</h3>
+          <p>ESPN reports it as an ordinary final with AFC and NFC as franchises. Seven were being trained on, averaging <strong>44.9 points a side against 23.0</strong> for real games. Worse, it is played in February &mdash; so it was the most recent game in the set, taking the largest recency weight and anchoring the decay clock for every other row.</p>
+          <div class="swing"><span class="from">48.3</span><span class="arw">&rarr;</span><span class="to">45.8</span><span class="ref">implied total, vs 46.0 actual</span></div>
+        </div>
+      </div>
+
+      <div class="find">
+        <div class="find-tag">WNBA &middot; method</div>
+        <div class="find-body">
+          <h3>Two lookaheads that would have flattered the model</h3>
+          <p>The shipped coefficients <em>are</em> <code>wnba_fit_v2.json</code>, trained on 1,246 games including 2026 &mdash; rounding in the source hides it, since 1.0992876 ships as 1.0993. And <code>priors2025</code> seeds every team with 2025 ratings regardless of date: correct live, but the future in a 2022&ndash;24 replay.</p>
+          <p>Both removed. The good news underneath: an honest walk-forward refit lands in the same place, so the coefficients themselves are sound.</p>
+        </div>
+      </div>
+
+      <div class="find">
+        <div class="find-tag">MLB &middot; trap</div>
+        <div class="find-body">
+          <h3>A single split said the opposite</h3>
+          <p>On one 521-game window an unregularised refit wanted a pythagorean coefficient of <strong>5.92</strong> against the shipped <strong>0.33</strong>, and beat it &mdash; which reads exactly like a model 18&times; under-scaled.</p>
+          <p>It did not survive walk-forward, which reversed the ranking entirely. One window plus five collinear features is enough noise to produce a large, confident, wrong coefficient.</p>
+        </div>
+      </div>
+
+      <div class="find">
+        <div class="find-tag">All sports</div>
+        <div class="find-body">
+          <h3>Home advantage alone never beats the base rate</h3>
+          <p>In every sport with skill &mdash; CFB, NFL and WNBA &mdash; a model that knows only who is at home fails to beat the constant, with a confidence interval spanning zero each time. The signal lives entirely in the team ratings.</p>
+          <p>The same structural bug can also be fatal in one sport and immaterial in another. NFL&rsquo;s starved scale fit cost it 30% of its confidence; the identical pattern in CFB is harmless, because a college season is 911 games to the NFL&rsquo;s 286. Measure per sport &mdash; never port a fix on the strength of a shared code pattern.</p>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <div class="col sec-head">
+      <div class="eyebrow">Method</div>
+      <h2>How these were run</h2>
+    </div>
+    <div class="col">
+      <p class="lede"><strong>Walk-forward.</strong> For each slate, the model is fitted on every game strictly before it, then predicts that slate. Nothing is ever scored on data it has seen. The MLB test showed why this matters: a single train/test split gave the opposite answer.</p>
+      <p class="lede"><strong>Paired bootstrap.</strong> Significance comes from 20,000 resamples of per-game log loss, paired against the baseline on the same games. Log loss rather than accuracy, because accuracy discards the confidence attached to each pick &mdash; and confidence is what a bet is made of.</p>
+      <p class="lede"><strong>The baseline is a moving constant</strong> &mdash; the home-win rate over prior games only, never the final season figure, which would itself be lookahead.</p>
+    </div>
+  </section>
+
+</main>
+
+<footer class="wrap">
+  <div class="foot">
+    <span><b>Scripts</b> scripts/{mlb,nfl,cfb,wnba}_skill_test.py</span>
+    <span><b>Writeups</b> analysis/*_skill.md</span>
+    <span><b>Not financial advice</b></span>
+  </div>
+</footer>
