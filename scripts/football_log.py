@@ -16,6 +16,7 @@ never needs to know what anyone bet.
 Output: data/football_lines.json
 """
 import importlib.util
+import unicodedata
 import json, math, os, urllib.request
 from datetime import datetime, timedelta, timezone
 
@@ -118,7 +119,16 @@ def scoreboard(path):
 
 
 def norm_name(s):
-    return "".join(ch for ch in (s or "").lower() if ch.isalnum())
+    """Join key for matching ESPN team names against the odds feed.
+
+    Accents must be STRIPPED, not merely lowercased. str.isalnum() is true for
+    "e", so the old version kept it and ESPN's "San Jose State Spartans" (with
+    the accent) never matched the feed's plain spelling — one CFB game silently
+    lost its field spread every time that team played, with no error anywhere.
+    NFD splits a letter from its combining mark; dropping the marks leaves ASCII.
+    """
+    d = unicodedata.normalize("NFD", (s or "").lower())
+    return "".join(ch for ch in d if ch.isalnum() and not unicodedata.combining(ch))
 
 
 def field_spreads(league, store=None, starts=()):

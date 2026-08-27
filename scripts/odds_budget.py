@@ -31,7 +31,12 @@ from datetime import datetime, timezone
 # itself to the active tier instead of trusting a number someone hand-edited
 # after an upgrade and might forget to change back. This applies when no
 # response has been seen yet this month.
-MONTHLY_CAP = 420
+# WAS 420, sized for the FREE tier's 500/month. The account moved to paid on
+# 2026-08-26 (20,000/month) and this never moved with it. It is a backstop only:
+# the check below is an `elif`, so while the API is telling us `remaining` this
+# never binds at all — but leaving a free-tier number here invites someone to
+# trust it. Measured cost under the cadence below is ~1,300/month.
+MONTHLY_CAP = 6000
 RESERVE = 60               # never spend the last of the tank; leave it for the page
 PROBE_H = 3.0              # how stale an "empty" reading gets before we re-check
 
@@ -39,10 +44,27 @@ PROBE_H = 3.0              # how stale an "empty" reading gets before we re-chec
 # Sized so the THROTTLE alone lands under MONTHLY_CAP (~360/month), leaving the
 # cap as a backstop rather than something that binds in the last week of the
 # month and silently stops capture during the games that matter most.
+# (slow_h, near_h, fast_min): normally fetch at most every slow_h hours; once a
+# kickoff is within near_h hours, drop to every fast_min minutes.
+#
+# FOOTBALL RETUNED 2026-08-26 for the paid tier. At (8, 3, 90) a game's last
+# capture could sit 90 minutes before kickoff, and a "closing" line an hour and a
+# half stale is not a closing line — CFB especially moves late on injury and
+# weather news. That was the right number on 500 credits/month and is far too
+# conservative on 20,000.
+#
+# near_h 3 -> 6 so a long Saturday enters fast mode before the first kickoff
+# rather than during it; fast_min 90 -> 20 so the last capture lands close to
+# the whistle. Cost: a fetch is 2 credits (1 market x 2 regions), a CFB Saturday
+# in fast mode is ~45 fetches = ~90 credits, and a full football week including
+# NFL Sunday and slow-mode midweek is ~300. Call it 1,300/month against 20,000.
+#
+# This data is NOT backfillable — ESPN keeps no historical odds (verified across
+# 2023-25, pickcenter returns nothing), so every kickoff missed is gone for good.
 BUDGET = {
     "mlb":   (24.0, 2.0, 120.0),   # refuted model, contributes nothing to the card
-    "nfl":   (8.0,  3.0,  90.0),
-    "ncaaf": (8.0,  3.0,  90.0),   # opens 2026-08-29, best-resolving model here
+    "nfl":   (4.0,  6.0,  20.0),
+    "ncaaf": (4.0,  6.0,  20.0),   # opens 2026-08-29, best-resolving model here
     "wnba":  (24.0, 2.0, 120.0),
 }
 DEFAULT = (12.0, 2.0, 120.0)
