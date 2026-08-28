@@ -48,7 +48,9 @@ for label, hp, pp in CHECKS:
 # constants in the logger, so they are matched by value rather than by name.
 for label, hp, pp in [
     ("WNBA moneyline w", r"WNBAML:\s*\{bet:true,\s*w:([0-9.]+)", r"W_WNBA_ML\s*=\s*([0-9.]+)"),
-    ("WNBA spread w",    r"WNBASP:\s*\{bet:true,\s*w:([0-9.]+)", r"W_WNBA_SP\s*=\s*([0-9.]+)"),
+    # bet: may be true or false - a market can be suspended without changing its
+    # fitted weight, and pinning bet:true here made the gate unpublishable.
+    ("WNBA spread w",    r"WNBASP:\s*\{bet:(?:true|false),\s*w:([0-9.]+)", r"W_WNBA_SP\s*=\s*([0-9.]+)"),
 ]:
     h = grab(hp, label, SRC, "index.html")
     p = grab(pp, label, LOG, "card_log.py")

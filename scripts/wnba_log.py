@@ -486,7 +486,14 @@ def main():
                 print(f"  skip {g['away']}@{g['home']} (no ratings)"); continue
             key = "|".join(sorted([g["home"], g["away"]]))
             e = {
+                # `date` is the US CALENDAR date, which is what the page groups
+                # by; `gameDate` is the ISO tip time, which is what anything
+                # time-aware needs. Only the first was stored, so card_log's
+                # main() - which drops a candidate whose start is missing or
+                # already past - discarded EVERY WNBA play regardless of edge.
+                # The card's WNBA path was dead from the day it was written.
                 "id": g["id"], "date": us_game_date(g["date"]),
+                "gameDate": g["date"],
                 "home": g["home"], "away": g["away"],
                 "model": m,
                 "vegas": g["vegas"], "spread": g["spread"],

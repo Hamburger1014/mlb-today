@@ -58,6 +58,10 @@ MAX_STAKE_GAME     = 0.02
 MAX_STAKE_DAY      = 0.06
 W_WNBA_ML          = 0.15
 W_WNBA_SP          = 0.40
+# Mirrors MARKET_EVIDENCE.WNBASP.bet in index.html. The page refuses to show a
+# suspended market, but the page renders the SERVER card too - so without this
+# the log would keep writing plays the page had been told not to make.
+BET_WNBA_SP        = False
 MIN_PROB_EDGE      = 0.04
 
 
@@ -437,6 +441,8 @@ def candidates(store=None, scan_out=None):
                 p_cover = 1 - norm_cdf(-sp["homeLine"], mu, sd)
                 dvs = devig_power([ml_to_raw(sp["homeOdds"]), ml_to_raw(sp["awayOdds"])])
                 if dvs:
+                    if not BET_WNBA_SP:
+                        continue          # market suspended; see WNBASP why-string
                     fair_h = sigmoid(W_WNBA_SP * logit(p_cover) + (1 - W_WNBA_SP) * logit(dvs[0]))
                     # No push mass under a continuous normal, so the away side is
                     # the complement. Each side carries ITS OWN line and price.
