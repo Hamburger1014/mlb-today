@@ -270,7 +270,16 @@ def norm_pair(a, b):
 
 # ── candidate generation (mirrors cardCandidates() in the page) ───────
 
-def candidates(store=None):
+def candidates(store=None, scan_out=None):
+    """Candidate plays for the card.
+
+    `scan_out`, if given, collects EVERY candidate that got priced — including
+    the ones that failed the bar. Without it the run leaves no trace of what it
+    looked at, so a question like "were there MLB plays this morning?" is
+    unanswerable after the fact: only the winners were ever written down. The
+    near-misses are the evidence that the scan ran and found the slate quiet,
+    which is a different statement from the scan not running at all.
+    """
     out = []
 
     def add(league, gid, id_src, home, away, start, side_home, p_fair, p_price,
@@ -282,6 +291,17 @@ def candidates(store=None):
         # sportsbook's cost is the vig, which is already inside p_price.
         shrink = CARD_MODEL_SHRINK if kind == "MODEL" else CARD_CROSS_SHRINK
         edge = raw * shrink - (cost(p_price) if kind == "CROSS" else 0.0)
+        if scan_out is not None:
+            # `passed` is only "cleared the edge bar". A candidate can clear it
+            # and still never be advised — main() drops anything whose start time
+            # is missing or already past. Record that separately or the log reads
+            # as though plays were on offer when none could be.
+            scan_out.append({
+                "league": league, "kind": kind, "market": market,
+                "matchup": f"{away}@{home}", "side": home if side_home else away,
+                "note": note, "raw": round(raw, 5), "edge": round(edge, 5),
+                "passed": edge >= CARD_MIN_EDGE, "hasStart": bool(start),
+            })
         if edge < CARD_MIN_EDGE:
             return
         b = (1 - p_price) / p_price
@@ -314,12 +334,16 @@ def candidates(store=None):
             f = ref["fairHome"]
             note = ("Pinnacle" if ref["pinnacle"] else f"{ref['nBooks']}-book") + " vs DraftKings"
             raw_h, raw_a = ml_to_raw(dkg["homeML"]), ml_to_raw(dkg["awayML"])
-            if f > raw_h:
-                add("MLB", dkg["gameId"], "espn", dkg["home"], dkg["away"], dkg["start"],
-                    True, f, raw_h, "BOOK", note, dkg["homeML"])
-            if (1 - f) > raw_a:
-                add("MLB", dkg["gameId"], "espn", dkg["home"], dkg["away"], dkg["start"],
-                    False, 1 - f, raw_a, "BOOK", note, dkg["awayML"])
+            # Call add() for BOTH sides unconditionally. It already rejects
+            # anything under the bar, so the old `if f > raw_h:` pre-filter
+            # changed no play — but it meant a game with no edge never reached
+            # add() and left NO TRACE in the scan. A quiet slate then looked
+            # identical to a scan that never ran, which is the ambiguity this
+            # logging exists to remove.
+            add("MLB", dkg["gameId"], "espn", dkg["home"], dkg["away"], dkg["start"],
+                True, f, raw_h, "BOOK", note, dkg["homeML"])
+            add("MLB", dkg["gameId"], "espn", dkg["home"], dkg["away"], dkg["start"],
+                False, 1 - f, raw_a, "BOOK", note, dkg["awayML"])
 
     # ── WNBA: cross-book AND model, both from the log this job already wrote ──
     wp = os.path.join(ROOT, "data", "wnba_predictions.json")
@@ -380,12 +404,10 @@ def candidates(store=None):
                 f = ref["fairHome"]
                 note = ("Pinnacle" if ref["pinnacle"] else f"{ref['nBooks']}-book") + " vs DraftKings"
                 raw_h, raw_a = ml_to_raw(v["homeML"]), ml_to_raw(v["awayML"])
-                if f > raw_h:
-                    add("WNBA", gid, "espn", home, away, start, True, f, raw_h,
-                        "BOOK", note, v["homeML"])
-                if (1 - f) > raw_a:
-                    add("WNBA", gid, "espn", home, away, start, False, 1 - f, raw_a,
-                        "BOOK", note, v["awayML"])
+                add("WNBA", gid, "espn", home, away, start, True, f, raw_h,
+                    "BOOK", note, v["homeML"])
+                add("WNBA", gid, "espn", home, away, start, False, 1 - f, raw_a,
+                    "BOOK", note, v["awayML"])
             # model — moneyline
             pm = (e.get("model") or {}).get("game")
             if pm is not None and bk is not None:
@@ -540,7 +562,8 @@ def main():
 
     now = datetime.now(timezone.utc)
     added = 0
-    for c in candidates(store):
+    scan = []
+    for c in candidates(store, scan):
         units = c["stakeCapped"] / CARD_UNIT
         if units < 0.05:
             continue                      # capped out — the card shows "no room", not advice
@@ -563,6 +586,33 @@ def main():
         })
         have.add(pid)
         added += 1
+
+    # ── the SCAN RECORD ───────────────────────────────────────────────
+    # One compact row per league per run: how many candidates were priced, how
+    # many cleared the bar, and the best edge seen with its identity. This is
+    # what makes "was there anything on MLB this morning?" answerable — the
+    # entries list only ever holds the plays that PASSED, so a quiet slate and a
+    # broken scan look identical in it.
+    by_league = {}
+    for r in scan:
+        b = by_league.setdefault(r["league"], {"priced": 0, "passed": 0, "best": None})
+        b["priced"] += 1
+        b["passed"] += 1 if r["passed"] else 0
+        if r["passed"] and not r.get("hasStart"):
+            b["noStart"] = b.get("noStart", 0) + 1
+        if b["best"] is None or r["edge"] > b["best"]["edge"]:
+            b["best"] = {"matchup": r["matchup"], "side": r["side"], "kind": r["kind"],
+                         "market": r["market"], "note": r["note"],
+                         "edge": r["edge"], "raw": r["raw"]}
+    if by_league:
+        scans = store.get("scans") or []
+        scans.append({"at": now.isoformat(timespec="seconds"), "bar": CARD_MIN_EDGE,
+                      "leagues": by_league})
+        # Keep three days. The logger fires every ~10 min over a ~16h window, so
+        # this settles near 300 rows — enough to answer "this morning" and
+        # "yesterday" without the file growing without bound.
+        cut = (now - timedelta(days=3)).isoformat(timespec="seconds")
+        store["scans"] = [x for x in scans if x.get("at", "") >= cut][-600:]
 
     graded = grade(entries)
 
