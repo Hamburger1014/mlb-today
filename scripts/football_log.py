@@ -33,6 +33,21 @@ ODDS_PROXY = "https://mlb-kalshi.gabrielhiginio2005.workers.dev"
 ODDS_SPORT = {"NFL": "nfl", "CFB": "ncaaf"}
 MODEL_FILE = {"NFL": "nfl_model.json", "CFB": "cfb_model.json"}
 
+# Paper picks are recorded at TWO fixed horizons, each written once. A pick two
+# weeks out and a pick on Friday are not the same measurement — the early number
+# is soft and moves for reasons unrelated to the model — so a single mixed sample
+# would measure the schedule rather than the picks.
+#
+# Recording both also tests the Walters thesis directly: he made his money on
+# early numbers, betting a line before the market had finished forming an
+# opinion. If this model has information, EARLY should show more closing-line
+# value than LATE. If early shows less, the model is following the market rather
+# than leading it, and that is worth knowing before any money is involved.
+#
+#   early  120h  -> Monday for a Saturday slate
+#   late    36h  -> Friday for a Saturday slate
+PICK_WINDOWS = {"early": 120.0, "late": 36.0}
+
 # The football models are loaded from their exported coefficients and used to
 # record a PREGAME prediction per game. Nothing did this before: the NFL and CFB
 # models predict on the page and no logger touched them, so neither could ever be
@@ -131,6 +146,15 @@ def scoreboard(path, back_days=3, fwd_days=10):
     if not evs:                       # deep offseason: fall back to whatever it has
         evs = get(f"{BASE}{path}/scoreboard?limit=200").get("events", []) or []
     return evs
+
+
+def _hours_to(start_iso):
+    """Hours from now until kickoff, or None if the timestamp is unusable."""
+    try:
+        t = datetime.fromisoformat((start_iso or "").replace("Z", "+00:00"))
+    except Exception:
+        return None
+    return (t - datetime.now(timezone.utc)).total_seconds() / 3600.0
 
 
 def norm_name(s):
@@ -271,7 +295,7 @@ def main():
             pass
     games = store.get("games", {})
 
-    seen = closed = added = matched = predicted = 0
+    seen = closed = added = matched = predicted = picked = 0
     for league, path in LEAGUES.items():
         try:
             evs = scoreboard(path)
@@ -350,6 +374,50 @@ def main():
                     if mp:
                         g["model"] = mp
                         predicted += 1
+
+                # ── PAPER PICK against the spread, for CLV only ───────────
+                # CFB has the strongest skill test of the four models (11.04 SE
+                # vs a constant) and has NEVER been tested against a price. This
+                # accrues that evidence without money at risk: record what the
+                # model WOULD take and at what number, then let football_clv.py
+                # grade it against the close.
+                #
+                # Written ONCE, inside a fixed window before kickoff, so the
+                # sample is homogeneous. A pick made two weeks out and one made
+                # on Friday are not the same measurement — the early line is soft
+                # and moves for reasons that have nothing to do with the model.
+                # PICK_WINDOW_H = 36 puts a Saturday slate on Friday.
+                if (_st != 1 and g.get("model")
+                        and snap.get("spHomeLine") is not None):
+                    _hrs = _hours_to(g.get("start"))
+                    _picks = g.setdefault("picks", {})
+                    for _tag, _win in PICK_WINDOWS.items():
+                        if _tag in _picks or _hrs is None or not (0 < _hrs <= _win):
+                            continue
+                        # Market's implied home margin is the negated home line.
+                        _mkt = -snap["spHomeLine"]
+                        _edge = g["model"]["margin"] - _mkt
+                        _home = _edge > 0        # model likes home vs the number
+                        _picks[_tag] = {
+                            "side": "home" if _home else "away",
+                            # THIS SIDE'S line, so CLV is `taken - close` on the
+                            # same quantity for both sides. Away is the negation.
+                            "line": snap["spHomeLine"] if _home else -snap["spHomeLine"],
+                            "odds": snap.get("spHomeOdds") if _home else snap.get("spAwayOdds"),
+                            "homeLine": snap["spHomeLine"],
+                            "modelMargin": g["model"]["margin"],
+                            "mktMargin": _mkt,
+                            "edgePts": round(_edge, 2),
+                            # The CONTROL: the side the market itself favours at
+                            # pick time. Raw CLV is not a valid test on its own —
+                            # measured on MLB, backing the favourite alone earned
+                            # +0.493pp and made a model look like it had +0.519pp
+                            # of skill. The paired difference is the real number.
+                            "ctrlSide": "home" if snap["spHomeLine"] < 0 else "away",
+                            "hoursOut": round(_hrs, 1),
+                            "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                        }
+                        picked += 1
             if state == "STATUS_FINAL":
                 try:
                     g["final"] = {"hs": int(float(home.get("score"))),
@@ -368,7 +436,8 @@ def main():
     json.dump(store, open(OUT, "w"), separators=(",", ":"))
     graded = sum(1 for g in games.values() if g.get("model") and g.get("final"))
     print(f"{seen} games with odds ({added} new), closing refreshed on {closed}, "
-          f"field spread on {matched}, model logged on {predicted} new "
+          f"field spread on {matched}, model logged on {predicted} new, "
+          f"paper picks {picked} new "
           f"({graded} now gradable), {len(games)} retained | {OB.summary(store)} -> {OUT}")
 
 

@@ -76,3 +76,81 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# ── PAPER PICK CLV ────────────────────────────────────────────────────────
+# The section above grades the NUMBER (open vs close) with no model involved.
+# This grades the MODEL's paper picks, recorded by football_log.py at two fixed
+# horizons, against the number the market closed at.
+#
+# CLV IS IN POINTS, NOT PRICE. Moving 3 -> 2.5 barely moves the price and changes
+# the bet enormously. Sign convention, pinned by cases below:
+#
+#     pts = lineTaken - lineAtClose        (on the side actually taken)
+#
+# Took home -3.5, closed -4.5  ->  -3.5 - -4.5 = +1.0   you got the better number
+# Took home -4.5, closed -3.5  ->  -4.5 - -3.5 = -1.0   you laid more than you had to
+# Took away +3.5, closed +4.5  ->  +3.5 - +4.5 = -1.0   you took fewer points
+#
+# THE CONTROL IS NOT OPTIONAL. Measured on MLB, simply backing the market's
+# favourite earned +0.493pp of raw CLV, and a model that mostly picked favourites
+# collected that drift and looked like it had +0.519pp of skill. The incremental
+# — model CLV minus the control on the SAME games — was +0.026pp, i.e. nothing.
+# Report the paired difference; the raw number is context, not evidence.
+
+
+def _side_line(g, side, block):
+    """That side's line from a snapshot block, or None."""
+    h = (g.get(block) or {}).get("spHomeLine")
+    if h is None:
+        return None
+    return h if side == "home" else -h
+
+
+def pick_clv():
+    games = json.load(open(OUT))["games"]
+    for league in ("CFB", "NFL"):
+        for tag in ("early", "late"):
+            rows = []
+            for g in games.values():
+                if g.get("league") != league:
+                    continue
+                p = (g.get("picks") or {}).get(tag)
+                if not p:
+                    continue
+                close = _side_line(g, p["side"], "closing")
+                if close is None:
+                    continue
+                # A pick is only measurable once the line has stopped moving, i.e.
+                # once `closing` is genuinely the close. Before kickoff it is still
+                # being overwritten, so grading it now measures nothing.
+                if (g.get("closing") or {}).get("at", "") <= p["at"]:
+                    continue
+                ctrl_taken = _side_line(g, p["ctrlSide"], "closing")
+                ctrl_at_pick = p["homeLine"] if p["ctrlSide"] == "home" else -p["homeLine"]
+                rows.append({
+                    "model": p["line"] - close,
+                    "ctrl": ctrl_at_pick - ctrl_taken,
+                    "edge": p["edgePts"],
+                })
+            if not rows:
+                print(f"{league} {tag}: no measurable picks yet "
+                      f"(a pick becomes measurable once the line has closed)")
+                continue
+            n = len(rows)
+            m = sum(r["model"] for r in rows) / n
+            c = sum(r["ctrl"] for r in rows) / n
+            d = [r["model"] - r["ctrl"] for r in rows]
+            inc = sum(d) / n
+            sd = (sum((x - inc) ** 2 for x in d) / (n - 1)) ** 0.5 if n > 1 else float("nan")
+            se = sd / (n ** 0.5) if n > 1 else float("nan")
+            beat = sum(1 for r in rows if r["model"] > r["ctrl"])
+            print(f"{league} {tag}: n={n}  model {m:+.3f} pts | control {c:+.3f} pts | "
+                  f"INCREMENTAL {inc:+.3f} +/- {se:.3f} (z={inc/se:+.2f})  beat control {beat}/{n}"
+                  if se == se and se > 0 else
+                  f"{league} {tag}: n={n}  model {m:+.3f} | control {c:+.3f} | incremental {inc:+.3f}")
+
+
+if __name__ == "__main__":
+    print()
+    pick_clv()
