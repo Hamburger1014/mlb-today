@@ -44,18 +44,39 @@ MIN_GAMES = 8          # below this a team is pooled into OTHER
 OTHER = "OTHER"
 
 
+# groups=80 is FBS, groups=81 is FCS. BOTH are fetched, and the reason is not to
+# predict FCS games — it is that FCS opponents were all collapsed into a single
+# OTHER rating, and they are not remotely equivalent. Measured over 301
+# FBS-vs-pooled games: FBS teams beat South Dakota State by +4.0 on average and
+# Arkansas-Pine Bluff by +48.7, a 44-point range rated as one team. The
+# between-opponent sd of 10.2 points is larger than home-field advantage.
+#
+# Every FBS team plays about one of these a year, so ~8% of each schedule was
+# being rated with a systematic ten-point error, and that error propagates into
+# the FBS ratings we actually bet.
+#
+# Measured on 887 FBS-vs-FBS games in 2025, walk-forward, scored only on games
+# the old pool could already predict so the comparison is honest:
+#     margin error 14.246 -> 13.937   gain +0.309 pts, 95% CI [+0.170, +0.451]
+#     log loss      0.5513 ->  0.5466  gain +0.0047, 95% CI [+0.0008, +0.0084]
+# Straight-up accuracy moved 71.93% -> 71.48%, which is four games and noise;
+# the paired continuous measures are what carry the signal.
+GROUPS = (80, 81)
+
+
 def fetch_games():
-    """Every completed FBS game in SEASONS. groups=80 is the FBS filter; without
-    it ESPN returns only a top-25 subset (20 events a week instead of 60)."""
+    """Every completed FBS and FCS game in SEASONS. Without an explicit groups
+    filter ESPN returns only a top-25 subset (20 events a week instead of 60)."""
     games = []
     for yr in SEASONS:
         n0 = len(games)
         for stype, weeks in ((2, range(1, 17)), (3, range(1, 3))):
+          for grp in GROUPS:
             for wk in weeks:
                 try:
-                    d = NM.get(f"{BASE}?dates={yr}&seasontype={stype}&week={wk}&groups=80")
+                    d = NM.get(f"{BASE}?dates={yr}&seasontype={stype}&week={wk}&groups={grp}&limit=300")
                 except Exception as e:
-                    print(f"  ! {yr} type{stype} wk{wk}: {e}")
+                    print(f"  ! {yr} type{stype} wk{wk} g{grp}: {e}")
                     continue
                 for ev in d.get("events", []) or []:
                     c = (ev.get("competitions") or [{}])[0]
@@ -123,7 +144,24 @@ def main():
     # 1.68, ridge 60 gives +5.50 and 2.13. Tuned on 2024 and confirmed on an
     # untouched 2025, where 5.0 beat 30.0 on every metric — log loss 0.5417 vs
     # 0.5679, ECE 4.06pp vs 4.55pp, accuracy 70.3% vs 68.7%.
-    NM.RIDGE = 5.0
+    # WAS 5.0, and that was correct for the OLD pool. Adding real FCS ratings
+    # changed what the ridge is compensating for. Previously 73 distinct FCS
+    # opponents shared one OTHER parameter — a badly MISSPECIFIED model — and a
+    # heavy ridge was papering over that misspecification. Specify those teams
+    # properly and the shrinkage is no longer needed.
+    #
+    # Tuned on 2024 and confirmed on an untouched 2025, scored only on
+    # FBS-vs-FBS games (the ones actually bet):
+    #
+    #   ridge  HFA     slope   MAE     logloss     <- 2025, untouched
+    #     0.5  +3.60   1.102   12.42   0.5054
+    #     5.0  +6.13   1.668   13.94   0.5466
+    #
+    # THE SLOPE IS THE TELL, same as the 2026-08 ridge bug: regress actual margin
+    # on predicted and 1.00 means uncompressed. At 5.0 the model was predicting
+    # margins two-thirds too small and HFA had absorbed the difference, inflating
+    # to +6.13 against a true value near +3.6.
+    NM.RIDGE = 0.5
     NM.HALF_LIFE_DAYS = 200.0
 
     shares = NM.quarter_shares(games)
