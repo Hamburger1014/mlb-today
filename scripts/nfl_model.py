@@ -71,6 +71,33 @@ HALF_LIFE_DAYS = 220.0      # ~1.3 seasons; a full prior year still counts, fain
 # shoulder rather than its tip — 32 teams and thin early-season data make the
 # less aggressive end the safer place to stand.
 RIDGE = 3.0
+# RE-CHECKED 2026-08-31 after the same sweep moved CFB from 5.0 to 0.5, and NFL
+# CHECKED CLEAN — no change. The two sports are not analogous and the reason
+# matters more than the number.
+#
+# CFB's heavy ridge was compensating for a MISSPECIFIED model: 73 distinct FCS
+# opponents shared one pooled OTHER parameter, and shrinkage was papering over
+# that. Once those teams were rated properly the shrinkage was no longer needed,
+# and HFA fell from +6.07 back to +3.53. The NFL has 32 well-defined teams on a
+# near-balanced schedule and no such misspecification, so the ridge is doing its
+# actual job rather than hiding a structural error.
+#
+# The diagnostic that proves it is HFA STABILITY. In CFB, HFA tracked the ridge
+# (+5.00 at 2.0, +7.83 at 40) because it was absorbing what the ridge squeezed
+# out of the team ratings. Here it does not move at all:
+#
+#   ridge   0.5    1.0    2.0    3.0    6.0   12.0     (tuned on 2024)
+#   HFA   +2.36  +2.36  +2.37  +2.38  +2.40  +2.43
+#   slope  0.904  0.934  0.994  1.053  1.224  1.555
+#
+# And the margin slope at the shipped 3.0 is 1.053 on 2024, 0.968 on untouched
+# 2025 — essentially 1.00, i.e. not compressed. Lowering to 0.5 pushes the slope
+# to 0.829, which overshoots in the other direction.
+#
+# Confirmed paired on untouched 2025, n=284: ridge 0.5 vs 3.0 gives margin error
+# -0.077 (95% CI [-0.186, +0.032], P(better) 0.083 — it is WORSE) and log loss
+# +0.0029 (95% CI [-0.0012, +0.0069], P 0.918). Both span zero. There is nothing
+# to gain, so 3.0 stands.
 
 # All-star squads ESPN reports as teams. Never real franchises.
 NON_TEAMS = {"AFC", "NFC"}
