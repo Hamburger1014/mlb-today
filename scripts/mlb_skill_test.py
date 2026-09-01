@@ -92,14 +92,27 @@ def build_rows(cache):
         if i % 75 == 0:
             print("  pitcher %d/%d" % (i, len(pids)), flush=True)
 
+    # These MUST match index.html's _kbbQuality or the test measures a model that
+    # is not the one shipping. They did not until 2026-08-31: this used a hard
+    # `bf >= 100 else None`, which is neither the floor nor the ramp the page
+    # applies, and it silently withheld a starter quality on 403 of 1,674 games
+    # that the live model rates perfectly well.
+    KBB_LG, KBB_WBF, BF_FLOOR = 0.14138, 250, 40
+
     def kbb_asof(pid, date):
+        """Starter K-BB% regressed toward league average by sample size, exactly
+        as index.html does it: null below a 40-BF floor, then a linear ramp to
+        full weight at 250 batters faced."""
         if not pid:
             return None
         k = bb = bf = 0
         for e in logs.get(pid, []):
             if e["d"] < date:                 # strictly before: no lookahead
                 k += e["k"]; bb += e["bb"]; bf += e["bf"]
-        return ((k - bb) / bf) if bf >= 100 else None
+        if bf < BF_FLOOR:
+            return None
+        wc = min(1.0, bf / KBB_WBF)
+        return wc * ((k - bb) / bf) + (1 - wc) * KBB_LG
 
     days = sorted({g["date"] for g in games})
     stand = {}

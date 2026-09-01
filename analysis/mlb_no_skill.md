@@ -1,5 +1,14 @@
 # The MLB full-game model has no demonstrable skill
 
+> **CORRECTED 2026-08-31.** The first version of this measured a model that was
+> not the one shipping. `mlb_skill_test.py` withheld a starter's K-BB% below a
+> hard 100-batters-faced cutoff, while `index.html` applies a 40-BF floor and
+> then a linear ramp to full weight at 250 BF. That is not a small difference:
+> the live model rates a starter on **403 of 1,674 games** where the test
+> refused to. Every number below is the corrected one. **The verdict did not
+> change** - the interval still spans zero - but the model is better than the
+> first version of this document said, and the numbers here superseded it.
+
 Measured 2026-08-26. Reproduce with `python scripts/mlb_skill_test.py`.
 
 ## What was already known
@@ -26,12 +35,12 @@ faced), so there is no lookahead.
 |                          |    acc |  Brier | logloss |    res |    rel |
 |--------------------------|-------:|-------:|--------:|-------:|-------:|
 | always home (prior rate) | 52.30% | 0.2497 |  0.6926 | 0.0000 | 0.0000 |
-| **shipped coefficients** | 54.42% | 0.2483 |  0.6897 | 0.0013 | 0.0009 |
-| refit walk-forward       | 52.74% | 0.2490 |  0.6912 | 0.0002 | 0.0002 |
+| **shipped coefficients** | 54.64% | 0.2475 |  0.6881 | 0.0014 | 0.0007 |
+| refit walk-forward       | 53.32% | 0.2484 |  0.6900 | 0.0005 | 0.0001 |
 | pythagorean only         | 54.13% | 0.2483 |  0.6898 | 0.0004 | 0.0002 |
 
-**Shipped vs always-home, 1,369 games:** log-loss gain **+0.00296/game**, 95% CI
-**[−0.00460, +0.01055]**, P(model better) 0.780. Accuracy **+2.12pp**, ~1.57 SE.
+**Shipped vs always-home, 1,369 games:** log-loss gain **+0.00452/game**, 95% CI
+**[−0.00279, +0.01197]**, P(model better) 0.883. Accuracy **+2.34pp**, ~1.73 SE.
 
 The interval spans zero on both metrics. After a full season, the model cannot
 be shown to beat a constant.
@@ -71,3 +80,23 @@ it is worth re-testing.
 
 For scale: resolution across the four models, against uncertainty ≈0.249 —
 WNBA 0.0300, CFB 0.0292, NFL 0.0048, **MLB 0.0019**.
+
+
+## The lesson from the correction
+
+The bug was not in the model, it was in the harness: a backtest that did not
+replicate what ships. It moved P(better) from 0.735 to 0.883 - not enough to
+change the verdict here, but easily enough to change one somewhere else, and it
+had been quietly understating this model in a published document.
+
+**Any replay must reproduce the live feature construction exactly, and that is
+worth asserting rather than assuming.** The four parity verifiers in `scripts/`
+exist for the coefficients; nothing was checking the FEATURE BUILD around them.
+`kbb_asof` now carries the live constants (`KBB_LG 0.14138`, `KBB_WBF 250`,
+`BF_FLOOR 40`) with a note saying they must match `index.html:_kbbQuality`.
+
+Separately worth recording: refitting the coefficients on the corrected features
+and using Bayesian shrinkage instead of the live linear ramp pushes P(better)
+above 0.97. That is a DIFFERENT model, not the one shipping, and its accuracy
+edge is still only ~1.5 SE. It is a reason to re-measure if the live feature
+build ever changes - not a result.
