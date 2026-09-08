@@ -28,6 +28,16 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 OUT  = os.path.join(ROOT, "data", "football_lines.json")
 BASE = "https://site.api.espn.com/apis/site/v2/sports/"
+# ESPN answers site.api with 403 from a GitHub runner while serving it fine from
+# a normal machine. wnba_log.py already carries this fallback; this file did not,
+# and the failure mode is SILENT: scoreboard() raises, main() catches per league
+# and continues, so the job succeeds, writes only `updated_at`, and commits.
+# Between 2026-08-31 and 2026-09-08 every bot commit to data/football_lines.json
+# changed that one timestamp and nothing else, while the CFB paper picks this
+# file exists to accrue sat frozen. Nothing alerted; the file kept being
+# committed, which is exactly what made it look alive.
+BASE_ALT = "https://site.web.api.espn.com/apis/site/v2/sports/"
+SB_HOST_USED = None
 LEAGUES = {"NFL": "football/nfl", "CFB": "football/college-football"}
 ODDS_PROXY = "https://mlb-kalshi.gabrielhiginio2005.workers.dev"
 ODDS_SPORT = {"NFL": "nfl", "CFB": "ncaaf"}
@@ -139,13 +149,21 @@ def scoreboard(path, back_days=3, fwd_days=10):
     The window reaches BACKWARD as well: finals are graded off this same feed, so
     a forward-only window would drop yesterday's games before they were graded.
     """
+    global SB_HOST_USED
     now = datetime.now(timezone.utc)
     d0 = (now - timedelta(days=back_days)).strftime("%Y%m%d")
     d1 = (now + timedelta(days=fwd_days)).strftime("%Y%m%d")
-    evs = get(f"{BASE}{path}/scoreboard?limit=300&dates={d0}-{d1}").get("events", []) or []
-    if not evs:                       # deep offseason: fall back to whatever it has
-        evs = get(f"{BASE}{path}/scoreboard?limit=200").get("events", []) or []
-    return evs
+    last = None
+    for label, host in (("site.api", BASE), ("site.web.api", BASE_ALT)):
+        try:
+            evs = get(f"{host}{path}/scoreboard?limit=300&dates={d0}-{d1}").get("events", []) or []
+            if not evs:               # deep offseason: whatever the default has
+                evs = get(f"{host}{path}/scoreboard?limit=200").get("events", []) or []
+            SB_HOST_USED = label
+            return evs
+        except Exception as e:
+            last = e
+    raise last
 
 
 def _hours_to(start_iso):
