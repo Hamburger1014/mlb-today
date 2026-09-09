@@ -39,7 +39,17 @@ Output: data/nfl_model.json
 import json, math, os, urllib.request
 from collections import defaultdict
 
-import numpy as np
+# numpy is imported INSIDE fit(), not here, and that is load-bearing rather than
+# tidy. scripts/football_log.py runs every 10 minutes in CI and needs only
+# predict_points(), which is pure Python. The workflow installs nothing and the
+# stock runner has no numpy, so a module-level import made the logger depend on a
+# package it never uses. The breakage was invisible for eight days because an
+# unrelated ESPN 403 meant the import was never reached; when that 403 was fixed
+# on 2026-09-08 the logger started working, reached model_predict, and every run
+# began dying on ModuleNotFoundError instead.
+#
+# Keep it this way: the 10-minute job must carry NO third-party dependency. Only
+# the model BUILDERS (this file's main, cfb_model.py) need the fitter.
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -182,6 +192,8 @@ def fit(games, asof=None):
     a margin model can tell you a team is favoured by 6 and still has nothing to
     say about whether the game is 27-21 or 13-7.
     """
+    import numpy as np          # see the note by the imports
+
     rows = [g for g in games if asof is None or day_number(g["date"]) < asof]
     teams = sorted({t for g in rows for t in (g["home"], g["away"])})
     ix = {t: i for i, t in enumerate(teams)}
